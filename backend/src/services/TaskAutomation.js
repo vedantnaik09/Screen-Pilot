@@ -1,10 +1,10 @@
 const browserSessionManager = require("./BrowserSessionManager");
-const LLMService = require("./LLMService");
+const OllamaLLMService = require("./OllamaLLMService");
 
 class TaskAutomation {
     async startTask(options) {
         const browserAutomation = await browserSessionManager.getBrowser();
-        const llmService = new LLMService();
+        const llmService = new OllamaLLMService();
         let completed = false;
         let previousActions = [];
         let phase = 0;
@@ -14,15 +14,15 @@ class TaskAutomation {
                 console.log(`\n[Phase ${phase}] Taking screenshot...`);
                 screenshotPath = await browserAutomation.takeScreenshot();
                 console.log(`[Phase ${phase}] Getting page source...`);
-                const pageSource = await browserAutomation.getPageSource();
+                // const pageSource = await browserAutomation.getPageSource();
 
                 let actions;
                 if (phase === 0) {
                     console.log(`[Phase ${phase}] Calling analyzeScreenshotAndQuery...`);
-                    actions = await llmService.analyzeScreenshotAndQuery(screenshotPath, pageSource, options.query);
+                    actions = await llmService.analyzeScreenshotAndQuery(screenshotPath, options.query);
                 } else {
                     console.log(`[Phase ${phase}] Calling analyzeWithContext with previous actions:`, previousActions.slice(-3));
-                    actions = await llmService.analyzeWithContext(screenshotPath, pageSource, options.query, previousActions.slice(-3));
+                    actions = await llmService.analyzeWithContext(screenshotPath, options.query, previousActions.slice(-3));
                 }
 
                 if (!Array.isArray(actions) || actions.length === 0) {
@@ -33,8 +33,27 @@ class TaskAutomation {
                 let phaseCompleted = false;
                 for (const [i, actionObj] of actions.entries()) {
                     console.log(`[Phase ${phase}] Executing action ${i + 1}/${actions.length}:`, actionObj);
-                    await this.executeAction(browserAutomation, actionObj);
-                    previousActions.push(actionObj);
+                    try {
+                        await this.executeAction(browserAutomation, actionObj);
+                        previousActions.push(actionObj);
+                    } catch (error) {
+                        console.log(`[Phase ${phase}] Error executing action:`, error.message);
+                        // Send error context to LLM for recovery suggestion
+                        const errorActions = await llmService.handleActionError({
+                            screenshotPath,
+                            query: options.query,
+                            previousActions: previousActions.slice(-3),
+                            lastAction: actionObj,
+                            error: error.message
+                        });
+                        if (Array.isArray(errorActions) && errorActions.length > 0) {
+                            actions = errorActions;
+                            // Restart the for loop with new actions
+                            break;
+                        } else {
+                            throw error;
+                        }
+                    }
 
                     if (actionObj.completed === true) {
                         console.log(`[Phase ${phase}] Task marked as completed by LLM.`);
