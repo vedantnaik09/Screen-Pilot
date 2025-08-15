@@ -25,7 +25,18 @@ class OllamaLLMService {
 
 Use your knowledge of common website structures and well-known sites (such as Amazon, Google, etc.) to select the most appropriate elements for automation. Use the screenshot only as a fallback reference if you cannot infer the structure from your knowledge.
 
+CRITICAL: For Amazon.in specifically, use these EXACT selectors:
+- Search input: selector="#twotabsearchtextbox", selectorType="id" 
+- Search button: selector="input[type='submit'][value='Go']", selectorType="css"
+- Product links: selector="[data-component-type='s-search-result'] h2 a", selectorType="css"
+- Add to cart: selector="#add-to-cart-button", selectorType="id"
+
 Rules:
+- NEVER use placeholder text, labels, or visible text as ID selectors
+- NEVER use selectorType="id" with text like "Search Amazon.in" - that's a placeholder, not an ID
+- For Amazon search: ALWAYS use "#twotabsearchtextbox" with selectorType="id"
+- For text selectors: Only use selectorType="text" with actual clickable text like button labels
+- For CSS selectors: Use selectorType="css" with proper CSS syntax
 - Always prioritize your knowledge of the website's structure (e.g., for Amazon, use known input/search bar ids, button classes, etc.).
 - For product listings on Amazon, prefer using known container classes (like 's-result-item'), data attributes (like 'data-asin'), or predictable CSS selectors for product links/buttons. Do NOT use visible product titles or dynamic text as selectors. Prefer clicking the first product by index or container, not by text.
 - Do NOT use long product titles, dynamic text, or placeholder/label text as selectors. Prefer unique, stable selectors (id, name, css, xpath).
@@ -79,37 +90,15 @@ Respond ONLY with valid JSON in this format:
 
             const response = await this.model.invoke([message]);
             const responseText = response.content.trim();
-            let cleanedResponse = responseText.replace(/```json|```/g, '').trim();
-            
-            // Handle multiple JSON arrays - take only the first valid one
-            if (cleanedResponse.includes('][')) {
-                const firstArrayEnd = cleanedResponse.indexOf(']') + 1;
-                cleanedResponse = cleanedResponse.substring(0, firstArrayEnd);
-            }
-            
-            // If response is truncated, try to fix it by finding the last complete action
-            if (!cleanedResponse.endsWith(']') && cleanedResponse.includes('{')) {
-                const lastCompleteAction = cleanedResponse.lastIndexOf('}, {');
-                if (lastCompleteAction > 0) {
-                    cleanedResponse = cleanedResponse.substring(0, lastCompleteAction + 1) + ']';
-                } else {
-                    // Find the last complete action ending with }
-                    const lastBrace = cleanedResponse.lastIndexOf('}');
-                    if (lastBrace > 0) {
-                        cleanedResponse = cleanedResponse.substring(0, lastBrace + 1) + ']';
-                    }
-                }
-            }
-            
-            // Try to auto-close a single open array
-            if (cleanedResponse.startsWith('[') && !cleanedResponse.endsWith(']')) {
-                cleanedResponse += ']';
-            }
+            console.log('Raw LLM response (handleActionError):', responseText);
             
             try {
-                return JSON.parse(cleanedResponse);
+                const parsed = JSON.parse(responseText);
+                console.log('Successfully parsed JSON (handleActionError):', parsed);
+                return parsed;
             } catch (parseError) {
-                console.error('Failed to parse LLM error recovery response:', responseText);
+                console.error('JSON parse error (handleActionError):', parseError);
+                console.error('Failed to parse LLM response:', responseText);
                 throw new Error('Invalid JSON response from LLM (error recovery)');
             }
         } catch (error) {
@@ -136,7 +125,18 @@ Available functions:
 
 Selector types: 'id', 'xpath', 'css', 'text' (for partial text match)
 
+CRITICAL: For Amazon.in specifically, use these EXACT selectors:
+- Search input: selector="#twotabsearchtextbox", selectorType="id" 
+- Search button: selector="input[type='submit'][value='Go']", selectorType="css"
+- Product links: selector="[data-component-type='s-search-result'] h2 a", selectorType="css"
+- Add to cart: selector="#add-to-cart-button", selectorType="id"
+
 Rules:
+- NEVER use placeholder text, labels, or visible text as ID selectors
+- NEVER use selectorType="id" with text like "Search Amazon.in" - that's a placeholder, not an ID
+- For Amazon search: ALWAYS use "#twotabsearchtextbox" with selectorType="id"
+- For text selectors: Only use selectorType="text" with actual clickable text like button labels
+- For CSS selectors: Use selectorType="css" with proper CSS syntax
 - Always prioritize your knowledge of the website's structure (e.g., for Amazon, use known input/search bar ids, button classes, etc.).
 - For product listings on Amazon, prefer using known container classes (like 's-result-item'), data attributes (like 'data-asin'), or predictable CSS selectors for product links/buttons. Do NOT use visible product titles or dynamic text as selectors. Prefer clicking the first product by index or container, not by text.
 - Do NOT use long product titles, dynamic text, or placeholder/label text as selectors. Prefer unique, stable selectors (id, name, css, xpath).
@@ -185,36 +185,14 @@ Respond ONLY with valid JSON in this format:
 
             const response = await this.model.invoke([message]);
             const responseText = response.content.trim();
-            let cleanedResponse = responseText.replace(/```json|```/g, '').trim();
-            
-            // Handle multiple JSON arrays - take only the first valid one
-            if (cleanedResponse.includes('][')) {
-                const firstArrayEnd = cleanedResponse.indexOf(']') + 1;
-                cleanedResponse = cleanedResponse.substring(0, firstArrayEnd);
-            }
-            
-            // If response is truncated, try to fix it by finding the last complete action
-            if (!cleanedResponse.endsWith(']') && cleanedResponse.includes('{')) {
-                const lastCompleteAction = cleanedResponse.lastIndexOf('}, {');
-                if (lastCompleteAction > 0) {
-                    cleanedResponse = cleanedResponse.substring(0, lastCompleteAction + 1) + ']';
-                } else {
-                    // Find the last complete action ending with }
-                    const lastBrace = cleanedResponse.lastIndexOf('}');
-                    if (lastBrace > 0) {
-                        cleanedResponse = cleanedResponse.substring(0, lastBrace + 1) + ']';
-                    }
-                }
-            }
-            
-            // Try to auto-close a single open array
-            if (cleanedResponse.startsWith('[') && !cleanedResponse.endsWith(']')) {
-                cleanedResponse += ']';
-            }
+            console.log('Raw LLM response (analyzeScreenshotAndQuery):', responseText);
             
             try {
-                return JSON.parse(cleanedResponse);
+                const parsed = JSON.parse(responseText);
+                console.log('Successfully parsed JSON (analyzeScreenshotAndQuery):', parsed);
+                return parsed;
             } catch (parseError) {
+                console.error('JSON parse error (analyzeScreenshotAndQuery):', parseError);
                 console.error('Failed to parse LLM response:', responseText);
                 throw new Error('Invalid JSON response from LLM');
             }
@@ -245,7 +223,26 @@ Available functions:
 
 Selector types: 'id', 'xpath', 'css', 'text' (for partial text match)
 
+CRITICAL: For Amazon.in specifically, use these EXACT selectors:
+- Search input: selector="#twotabsearchtextbox", selectorType="id" 
+- Search button: selector="input[type='submit'][value='Go']", selectorType="css"
+- Product links: selector="[data-component-type='s-search-result'] h2 a", selectorType="css"
+- Add to cart: selector="#add-to-cart-button", selectorType="id"
+
+EXAMPLES of CORRECT selectors for Amazon:
+✅ {"selector": "#twotabsearchtextbox", "selectorType": "id"} - FOR SEARCH INPUT
+✅ {"selector": "input[type='submit'][value='Go']", "selectorType": "css"} - FOR SEARCH BUTTON
+
+EXAMPLES of WRONG selectors (NEVER USE):
+❌ {"selector": "Search Amazon.in", "selectorType": "id"} - This is placeholder text, not an ID!
+❌ {"selector": "input[type='text'][placeholder='Search Amazon.in']", "selectorType": "css"} - Too specific and fragile!
+
 Rules:
+- NEVER use placeholder text, labels, or visible text as ID selectors
+- NEVER use selectorType="id" with text like "Search Amazon.in" - that's a placeholder, not an ID
+- For Amazon search: ALWAYS use "#twotabsearchtextbox" with selectorType="id"
+- For text selectors: Only use selectorType="text" with actual clickable text like button labels
+- For CSS selectors: Use selectorType="css" with proper CSS syntax
 - Always prioritize your knowledge of the website's structure (e.g., for Amazon, use known input/search bar ids, button classes, etc.).
 - For product listings on Amazon, prefer using known container classes (like 's-result-item'), data attributes (like 'data-asin'), or predictable CSS selectors for product links/buttons. Do NOT use visible product titles or dynamic text as selectors. Prefer clicking the first product by index or container, not by text.
 - Do NOT use long product titles, dynamic text, or placeholder/label text as selectors. Prefer unique, stable selectors (id, name, css, xpath).
@@ -296,36 +293,14 @@ Respond ONLY with valid JSON in this format:
 
             const response = await this.model.invoke([message]);
             const responseText = response.content.trim();
-            let cleanedResponse = responseText.replace(/```json|```/g, '').trim();
-            
-            // Handle multiple JSON arrays - take only the first valid one
-            if (cleanedResponse.includes('][')) {
-                const firstArrayEnd = cleanedResponse.indexOf(']') + 1;
-                cleanedResponse = cleanedResponse.substring(0, firstArrayEnd);
-            }
-            
-            // If response is truncated, try to fix it by finding the last complete action
-            if (!cleanedResponse.endsWith(']') && cleanedResponse.includes('{')) {
-                const lastCompleteAction = cleanedResponse.lastIndexOf('}, {');
-                if (lastCompleteAction > 0) {
-                    cleanedResponse = cleanedResponse.substring(0, lastCompleteAction + 1) + ']';
-                } else {
-                    // Find the last complete action ending with }
-                    const lastBrace = cleanedResponse.lastIndexOf('}');
-                    if (lastBrace > 0) {
-                        cleanedResponse = cleanedResponse.substring(0, lastBrace + 1) + ']';
-                    }
-                }
-            }
-            
-            // Try to auto-close a single open array
-            if (cleanedResponse.startsWith('[') && !cleanedResponse.endsWith(']')) {
-                cleanedResponse += ']';
-            }
+            console.log('Raw LLM response (analyzeWithContext):', responseText);
             
             try {
-                return JSON.parse(cleanedResponse);
+                const parsed = JSON.parse(responseText);
+                console.log('Successfully parsed JSON (analyzeWithContext):', parsed);
+                return parsed;
             } catch (parseError) {
+                console.error('JSON parse error (analyzeWithContext):', parseError);
                 console.error('Failed to parse LLM response:', responseText);
                 throw new Error('Invalid JSON response from LLM');
             }
