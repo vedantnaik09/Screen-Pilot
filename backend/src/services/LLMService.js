@@ -33,7 +33,7 @@ Use the HTML to identify exact IDs, classes, and elements. The HTML shows the re
 4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
 5. Use short text selectors (max 15 characters) to avoid XPath errors
 6. Set "phaseCompleted": true if the page will change after this action
-7. Set "completed": true ONLY when the entire task is fully accomplished
+7. Set "completed": true ONLY when this current action will supposedly finish the execution of the query : ${query}
 8. Generate maximum 3 actions per response
 9. Only generate actions for elements visible in the screenshot or HTML
 
@@ -112,7 +112,7 @@ ${JSON.stringify(previousActions, null, 2)}
 4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
 5. Use short text selectors (max 15 characters) to avoid XPath errors
 6. Set "phaseCompleted": true if the page will change after this action
-7. Set "completed": true ONLY when the entire task is fully accomplished
+7. Set "completed": true ONLY when this current action will supposedly finish the execution of the query : ${query}
 8. Don't repeat previous actions unless necessary
 9. Generate maximum 3 actions per response
 10. Only generate actions for elements visible in the screenshot or HTML
@@ -190,6 +190,9 @@ ${interceptingElement ? `**INTERCEPTING ELEMENT:** ${interceptingElement}` : ''}
 9. Generate maximum 3 recovery actions
 10. DO NOT restart the task - continue from current state
 11. Only generate actions for elements visible in the screenshot
+12. Set "phaseCompleted": true if the page will change after this action
+13. Set "completed": true ONLY when this current action will supposedly finish the execution of the query : ${query}
+14. Don't repeat previous actions unless necessary
 
 **ACTION PARAMETER FORMATS:**
 - navigateToWebsite: { "website": "https://example.com" }
