@@ -1,315 +1,504 @@
+
 const { ChatOllama } = require("@langchain/ollama");
 const { HumanMessage } = require("@langchain/core/messages");
-const fs = require('fs');
+const { z } = require("zod");
+const fs = require("fs");
+
+
+// Define the schema for a single action
+const ActionSchema = z.object({
+	action: z.enum([
+		"navigateToWebsite",
+		"clickElement",
+		"fillInput",
+		"scrollToElement",
+		"waitForElement"
+	]),
+	params: z.object({
+		website: z.string().optional(),
+		selector: z.string().optional(),
+		selectorType: z.enum(["id", "css", "xpath", "text"]).optional(),
+		text: z.string().optional(),
+		timeout: z.number().optional()
+	}),
+	reasoning: z.string(),
+	phaseCompleted: z.boolean(),
+	completed: z.boolean()
+});
+
+// The LLM should return an array of actions
+const ActionsArraySchema = z.array(ActionSchema);
+
+function extractFirstJsonArray(text) {
+	// Use a greedy match to capture the entire array, even if it contains nested objects
+	const match = text.match(/\[.*\]/s);
+	if (match) {
+		try {
+			return JSON.parse(match[0]);
+		} catch (e) {
+			// If parsing fails, fall through
+		}
+	}
+	throw new Error("No valid JSON array found in LLM output");
+}
 
 class OllamaLLMService {
-    constructor() {
-        this.model = new ChatOllama({
-            model: "qwen2.5vl", // Much better for vision-language tasks and UI understanding
-            baseUrl: "https://emerging-cockatoo-informally.ngrok-free.app/", // Default Ollama URL
-            temperature: 0.1,
-            // Qwen2-VL is specifically designed for vision tasks and should provide better JSON responses
-        });
-    }
+	constructor() {
+		this.model = new ChatOllama({
+			baseUrl: "https://emerging-cockatoo-informally.ngrok-free.app/", // adjust if needed
+			model: "qwen2.5vl",
+		});
+	}
 
-    // Handle error feedback and ask LLM for a new suggestion
-    async handleActionError({ screenshotPath, query, previousActions = [], lastAction, error }) {
-        try {
-            const imageBuffer = fs.readFileSync(screenshotPath);
-            const base64Image = imageBuffer.toString('base64');
-            const contextPrompt = previousActions.length > 0
-                ? `\n\nPrevious actions taken: ${JSON.stringify(previousActions, null, 2)}`
-                : '';
 
-            const systemPrompt = `You are a browser automation assistant. The previous action failed with the following error: "${error}".
+	async analyzeScreenshotAndQuery(screenshotPath, query) {
+		const imageBuffer = fs.readFileSync(screenshotPath);
+		const base64Image = imageBuffer.toString("base64");
 
-Use your knowledge of common website structures and well-known sites (such as Amazon, Google, etc.) to select the most appropriate elements for automation. Use the screenshot only as a fallback reference if you cannot infer the structure from your knowledge.
+						const prompt = `
+You are a browser-automation assistant for a Node.js backend that uses Selenium WebDriver (Chrome).  
+Your task is to output **one valid JSON array (no Markdown)** containing at most **three** action objects that will satisfy the user's query by interacting with the page visible in the supplied screenshot.
 
-CRITICAL: For Amazon.in specifically, use these EXACT selectors:
-- Search input: selector="#twotabsearchtextbox", selectorType="id" 
-- Search button: selector="input[type='submit'][value='Go']", selectorType="css"
-- Product links: selector="[data-component-type='s-search-result'] h2 a", selectorType="css"
-- Add to cart: selector="#add-to-cart-button", selectorType="id"
 
-Rules:
-- NEVER use placeholder text, labels, or visible text as ID selectors
-- NEVER use selectorType="id" with text like "Search Amazon.in" - that's a placeholder, not an ID
-- For Amazon search: ALWAYS use "#twotabsearchtextbox" with selectorType="id"
-- For text selectors: Only use selectorType="text" with actual clickable text like button labels
-- For CSS selectors: Use selectorType="css" with proper CSS syntax
-- Always prioritize your knowledge of the website's structure (e.g., for Amazon, use known input/search bar ids, button classes, etc.).
-- For product listings on Amazon, prefer using known container classes (like 's-result-item'), data attributes (like 'data-asin'), or predictable CSS selectors for product links/buttons. Do NOT use visible product titles or dynamic text as selectors. Prefer clicking the first product by index or container, not by text.
-- Do NOT use long product titles, dynamic text, or placeholder/label text as selectors. Prefer unique, stable selectors (id, name, css, xpath).
-- Only use text selectors if the text is short, visible, and not a placeholder, label, or dynamic content.
-- Always wait for elements to be visible and enabled before clicking or interacting.
-- If an element is not interactable, suggest scrolling, waiting, or closing overlays/popups/modals before retrying.
-- Check for overlays, modals, or other UI elements that may block interaction and close or dismiss them if present.
-- Only select elements that are visible and interactable (not hidden, disabled, or off-screen).
-- If you are not sure an element is interactable, suggest a 'waitForElement' or 'scrollToElement' action before interacting.
-- If the error suggests a different approach, recommend it.
-- If an action (like navigation or clicking a link/button) leads to a new page or significant DOM change, set "phaseCompleted": true for that action and stop generating further actions for this phase. Wait for the next screenshot before continuing.
-- Only set "completed": true in the last action if the user's query is fully completed.
-- ALWAYS return an array of actions, even if only one action is needed.
+========================  GENERAL RULES  ========================
+1. Return **only** the JSON array. Use double quotes for every JSON string.
+2. Every action object must contain:
+  • "action"           - one of: navigateToWebsite | clickElement | fillInput | scrollToElement | waitForElement  
+  • "params"           - see per-action requirements below  
+  • "reasoning"        - 1-sentence justification (assistants only; humans will not see it)  
+  • "phaseCompleted"   - true if the DOM will reload or change substantially after this action  
+  • "completed"        - true only if ${query} is achieved completely, refer to the screenshot as well for the confirmation.
+3. **Never output more than three actions.** If more steps are needed, end with phaseCompleted:true so the controller can call you again.
+4. Do not repeat the same action with identical params consecutively—adjust strategy instead.
+5. Favor **id** or **css** selectors, then **xpath**, and use **text** only if the text is short, visible, unique, and stable.
+6. **Do NOT use an input field (such as a text box) as a click target for submitting a search or form. Only click actual buttons or elements intended for submission.**
+7. **For submitting a search or form, prefer clicking a button (e.g., with type='submit', or a visible search icon/button) rather than the input field itself.**
+8. **Never use the placeholder text of an input as a selector for a button click. Only use it for identifying input fields to type into.**
+9. **If you cannot confidently identify a search or submit button, do NOT click the input field. Instead, return a waitForElement or scrollToElement action for a likely button, or set phaseCompleted: true and explain in reasoning.**
+10. **For Amazon, the search button is usually a button next to the search input, often with type='submit', or a class like '.nav-search-submit'. Try to use such selectors if visible.**
 
-${contextPrompt}
+========================  SELECTOR TYPES & EXACT SYNTAX  ========================
+• id  
+  - params.selector: the raw id value, WITHOUT “#” (e.g., "submitBtn")  
+• css  
+  - params.selector: any valid CSS selector (e.g., "#submitBtn", ".btn.primary", "div[data-role='item']")  
+• xpath  
+  - params.selector: full XPath beginning with // or / and using @ for attributes  
+    Examples: "//button[@type='submit']" , "//div[@data-test='card'][1]"  
+    NEVER mix CSS syntax inside an XPath.  
+• text  
+  - If you are unsure about the selector or selectorType, rely on the screenshot and the visible text on the element.
+  - params.selector: a short, unique, and stable substring of the visible text of a link or button (e.g., "Add to Cart" or a distinctive part of it). Do NOT use the entire long text, as OCR or screenshot text may be imperfect. Instead, use a partial but unique substring that is visible and likely to match only the intended element.
+  - Do **not** use placeholder, aria-label, tooltip, or long/dynamic strings.
 
-Last attempted action: ${JSON.stringify(lastAction, null, 2)}
+========================  PER-ACTION PARAMS  ========================
+1. navigateToWebsite  
+   params = { "website": "https://example.com" }   // full absolute URL
 
+2. clickElement  
+   params = { "selector": "<selector>", "selectorType": "id|css|xpath|text" }
+
+3. fillInput  
+   params = { 
+     "selector": "<selector>", 
+     "selectorType": "id|css|xpath|text", 
+     "text": "<text to type>" 
+   }
+
+4. scrollToElement  
+   params = { "selector": "<selector>", "selectorType": "id|css|xpath|text" }
+
+5. waitForElement  
+   params = { 
+     "selector": "<selector>", 
+     "selectorType": "id|css|xpath|text", 
+     "timeout": 5000 // optional, defaults to 5000 ms 
+   }
+
+========================  BEST PRACTICES  ========================
+• Before interacting with an element that might be off-screen or load late, insert a waitForElement or scrollToElement first.  
+• Avoid placeholder, aria-label, long class strings, and volatile attribute values.  
+• Use known stable ids on popular sites (e.g., Amazon search bar id "twotabsearchtextbox").  
+• If you are unsure about the selector or selectorType, rely on the screenshot and the visible text. For selectorType 'text', use a short, unique, and stable substring of the visible text (not the entire text) to identify the element. This helps avoid errors from OCR or long/dynamic text.
+• Set phaseCompleted:true on the last action before a full page reload (e.g., clicking a search button).  
+• Only set completed:true on the very final action that accomplishes the user's high-level goal.
+• Return a maximum of 3 actions, no more than that.
+• Do not generate actions beyond a phase, only generate actions up to that phase
+========================  SCHEMA TEMPLATE (DO NOT COPY VALUES)  ========================
+[
+  {
+    "action": "navigateToWebsite",
+    "params": { "website": "<url>" },
+    "reasoning": "Load the target site.",
+    "phaseCompleted": true,
+    "completed": false
+  },
+  {
+    "action": "fillInput",
+    "params": { 
+      "selector": "<selector>", 
+      "selectorType": "id|css|xpath|text", 
+      "text": "<text>" 
+    },
+    "reasoning": "Enter the user's search term.",
+    "phaseCompleted": false,
+    "completed": false
+  },
+  {
+    "action": "clickElement",
+    "params": { 
+      "selector": "<selector>", 
+      "selectorType": "id|css|xpath|text" 
+    },
+    "reasoning": "Submit the search.",
+    "phaseCompleted": false,
+    "completed": true
+  }
+]
+
+========================  INPUTS  ========================
+Screenshot: <screenshotPath>
 User Query: ${query}
 
-Respond ONLY with valid JSON in this format:
-[
-    {
-        "action": "functionName",
-        "params": {
-            "selector": "element_selector",
-            "selectorType": "id|css|xpath|text",
-            "text": "text_to_fill" // only for fillInput
-        },
-        "reasoning": "Brief explanation",
-        "phaseCompleted": false,
-        "completed": false
-    }
-]
+
+======================== IMPORTANT INSTRUCTION ===============
+- Do not generate more than 3 actions.
+- Only generate the minimum number of actions only for that phase.
+- Please analyse the attached screenshot as well so that there is no redundancy, generate the actions cleverly. Check if that action has already taken place, if yes then dont generate that action again, generate further actions.
+- For xpath use full XPath beginning with // or / and using @ for attributes.
+- If you are unsure about the selector or selectorType, rely on the screenshot and the visible text. For selectorType 'text', use a short, unique, and stable substring of the visible text (not the entire text) to identify the element.
+- **Do NOT use an input field (such as a text box) as a click target for submitting a search or form. Only click actual buttons or elements intended for submission.**
+- **For submitting a search or form, prefer clicking a button (e.g., with type='submit', or a visible search icon/button) rather than the input field itself.**
+- **Never use the placeholder text of an input as a selector for a button click. Only use it for identifying input fields to type into.**
+- **If you cannot confidently identify a search or submit button, do NOT click the input field. Instead, return a waitForElement or scrollToElement action for a likely button, or set phaseCompleted: true and explain in reasoning.**
+- **For Amazon, the search button is usually a button next to the search input, often with type='submit', or a class like '.nav-search-submit'. Try to use such selectors if visible.**
+
+========================  OUTPUT  ========================
+Return only the JSON array of actions that satisfies the query and adheres strictly to all rules above. Do NOT output anything else.
 `;
 
-            const message = new HumanMessage({
-                content: [
-                    {
-                        type: "text",
-                        text: systemPrompt
-                    },
-                    {
-                        type: "image_url",
-                        image_url: {
-                            url: `data:image/png;base64,${base64Image}`
-                        }
-                    }
-                ]
-            });
 
-            const response = await this.model.invoke([message]);
-            const responseText = response.content.trim();
-            console.log('Raw LLM response (handleActionError):', responseText);
-            
-            try {
-                const parsed = JSON.parse(responseText);
-                console.log('Successfully parsed JSON (handleActionError):', parsed);
-                return parsed;
-            } catch (parseError) {
-                console.error('JSON parse error (handleActionError):', parseError);
-                console.error('Failed to parse LLM response:', responseText);
-                throw new Error('Invalid JSON response from LLM (error recovery)');
-            }
-        } catch (error) {
-            console.error('Error in LLM error recovery:', error);
-            throw error;
-        }
-    }
+		const message = new HumanMessage({
+			content: [
+				{ type: "text", text: prompt },
+				{ type: "image_url", image_url: { url: `data:image/png;base64,${base64Image}` } }
+			]
+		});
 
-    // No longer require pageSource as a parameter
-    async analyzeScreenshotAndQuery(screenshotPath, query) {
-        try {
-            // Read and encode screenshot
-            const imageBuffer = fs.readFileSync(screenshotPath);
-            const base64Image = imageBuffer.toString('base64');
+		const response = await this.model.invoke([message]);
+		// Try to extract and parse the first JSON array from the LLM output
+		let actions;
+		let raw;
+		try {
+			if (typeof response === "string") {
+				raw = response;
+			} else if (response && typeof response.content === "string") {
+				raw = response.content;
+			} else {
+				throw new Error("Unexpected LLM response format");
+			}
+			actions = extractFirstJsonArray(raw);
+			actions = ActionsArraySchema.parse(actions);
+		} catch (err) {
+			console.error("Raw LLM output:", raw);
+			throw new Error("Failed to parse or validate LLM output: " + err.message);
+		}
+		return actions;
+	}
 
-            const systemPrompt = `You are a browser automation assistant. Use your knowledge of common website structures and well-known sites (such as Amazon, Google, etc.) to select the most appropriate elements for automation. Use the screenshot only as a fallback reference if you cannot infer the structure from your knowledge.
 
-Available functions:
-1. navigateToWebsite(website) - Navigate to a website
-2. clickElement(selector, selectorType) - Click a button, link, or any clickable element
-3. fillInput(selector, text, selectorType) - Fill an input field with text
-4. scrollToElement(selector, selectorType) - Scroll to bring an element into view
-5. waitForElement(selector, selectorType, timeout) - Wait for an element to appear
+	async analyzeWithContext(screenshotPath, query, previousActions = []) {
+		const imageBuffer = fs.readFileSync(screenshotPath);
+		const base64Image = imageBuffer.toString("base64");
+		const contextPrompt = previousActions.length > 0 ? `\nPrevious actions: ${JSON.stringify(previousActions, null, 2)}` : '';
 
-Selector types: 'id', 'xpath', 'css', 'text' (for partial text match)
+const prompt = `
+You are a browser-automation assistant for a Node.js backend that uses Selenium WebDriver (Chrome).  
+Your task is to output **one valid JSON array (no Markdown)** containing at most **three** action objects that will satisfy the user's query by interacting with the page visible in the supplied screenshot.
 
-CRITICAL: For Amazon.in specifically, use these EXACT selectors:
-- Search input: selector="#twotabsearchtextbox", selectorType="id" 
-- Search button: selector="input[type='submit'][value='Go']", selectorType="css"
-- Product links: selector="[data-component-type='s-search-result'] h2 a", selectorType="css"
-- Add to cart: selector="#add-to-cart-button", selectorType="id"
+========================  GENERAL RULES  ========================
+1. Return **only** the JSON array. Use double quotes for every JSON string.
+2. Every action object must contain:
+   • "action"           - one of: navigateToWebsite | clickElement | fillInput | scrollToElement | waitForElement  
+   • "params"           - see per-action requirements below  
+   • "reasoning"        - 1-sentence justification (assistants only; humans will not see it)  
+   • "phaseCompleted"   - true if the DOM will reload or change substantially after this action  
+   • "completed"        - true only if ${query} is achieved completely, refer to the screenshot as well for the confirmation.
+3. **Never output more than three actions.** If more steps are needed, end with phaseCompleted:true so the controller can call you again.
+4. Do not repeat the same action with identical params consecutively—adjust strategy instead.
+5. Favor **id** or **css** selectors, then **xpath**, and use **text** only if the text is short, visible, unique, and stable.
 
-Rules:
-- NEVER use placeholder text, labels, or visible text as ID selectors
-- NEVER use selectorType="id" with text like "Search Amazon.in" - that's a placeholder, not an ID
-- For Amazon search: ALWAYS use "#twotabsearchtextbox" with selectorType="id"
-- For text selectors: Only use selectorType="text" with actual clickable text like button labels
-- For CSS selectors: Use selectorType="css" with proper CSS syntax
-- Always prioritize your knowledge of the website's structure (e.g., for Amazon, use known input/search bar ids, button classes, etc.).
-- For product listings on Amazon, prefer using known container classes (like 's-result-item'), data attributes (like 'data-asin'), or predictable CSS selectors for product links/buttons. Do NOT use visible product titles or dynamic text as selectors. Prefer clicking the first product by index or container, not by text.
-- Do NOT use long product titles, dynamic text, or placeholder/label text as selectors. Prefer unique, stable selectors (id, name, css, xpath).
-- Only use text selectors if the text is short, visible, and not a placeholder, label, or dynamic content.
-- Always wait for elements to be visible and enabled before clicking or interacting.
-- If an element is not interactable, suggest scrolling, waiting, or closing overlays/popups/modals before retrying.
-- Check for overlays, modals, or other UI elements that may block interaction and close or dismiss them if present.
-- Only select elements that are visible and interactable (not hidden, disabled, or off-screen).
-- If you are not sure an element is interactable, suggest a 'waitForElement' or 'scrollToElement' action before interacting.
-- If an action (like navigation or clicking a link/button) leads to a new page or significant DOM change, set "phaseCompleted": true for that action and stop generating further actions for this phase. Wait for the next screenshot before continuing.
-- Only set "completed": true in the last action if the user's query is fully completed.
-- ALWAYS return an array of actions, even if only one action is needed.
+========================  SELECTOR TYPES & EXACT SYNTAX  ========================
+• id  
+  - params.selector: the raw id value, WITHOUT “#” (e.g., "submitBtn")  
+• css  
+  - params.selector: any valid CSS selector (e.g., "#submitBtn", ".btn.primary", "div[data-role='item']")  
+• xpath  
+  - params.selector: full XPath beginning with // or / and using @ for attributes  
+    Examples: "//button[@type='submit']" , "//div[@data-test='card'][1]"  
+    NEVER mix CSS syntax inside an XPath.  
+• text  
+  - If you are unsure about the selector or selectorType, rely on the screenshot and the visible text on the element.
+  - params.selector: a short, unique, and stable substring of the visible text of a link or button (e.g., "Add to Cart" or a distinctive part of it). Do NOT use the entire long text, as OCR or screenshot text may be imperfect. Instead, use a partial but unique substring that is visible and likely to match only the intended element.
+  - Do **not** use placeholder, aria-label, tooltip, or long/dynamic strings.
 
+========================  PER-ACTION PARAMS  ========================
+1. navigateToWebsite  
+   params = { "website": "https://example.com" }   // full absolute URL
+
+2. clickElement  
+   params = { "selector": "<selector>", "selectorType": "id|css|xpath|text" }
+
+3. fillInput  
+   params = { 
+     "selector": "<selector>", 
+     "selectorType": "id|css|xpath|text", 
+     "text": "<text to type>" 
+   }
+
+4. scrollToElement  
+   params = { "selector": "<selector>", "selectorType": "id|css|xpath|text" }
+
+5. waitForElement  
+   params = { 
+     "selector": "<selector>", 
+     "selectorType": "id|css|xpath|text", 
+     "timeout": 5000 // optional, defaults to 5000 ms 
+   }
+
+========================  BEST PRACTICES  ========================
+• Before interacting with an element that might be off-screen or load late, insert a waitForElement or scrollToElement first.  
+• Avoid placeholder, aria-label, long class strings, and volatile attribute values.  
+• Use known stable ids on popular sites (e.g., Amazon search bar id "twotabsearchtextbox").  
+• If you are unsure about the selector or selectorType, rely on the screenshot and the visible text. For selectorType 'text', use a short, unique, and stable substring of the visible text (not the entire text) to identify the element. This helps avoid errors from OCR or long/dynamic text.
+• Set phaseCompleted:true on the last action before a full page reload (e.g., clicking a search button).  
+• Only set completed:true on the very final action that accomplishes the user's high-level goal.
+• Return a maximum of 3 actions, no more than that.
+• Do not generate actions beyond a phase, only generate actions up to that phase
+========================  SCHEMA TEMPLATE (DO NOT COPY VALUES)  ========================
+[
+  {
+    "action": "navigateToWebsite",
+    "params": { "website": "<url>" },
+    "reasoning": "Load the target site.",
+    "phaseCompleted": true,
+    "completed": false
+  },
+  {
+    "action": "fillInput",
+    "params": { 
+      "selector": "<selector>", 
+      "selectorType": "id|css|xpath|text", 
+      "text": "<text>" 
+    },
+    "reasoning": "Enter the user's search term.",
+    "phaseCompleted": false,
+    "completed": false
+  },
+  {
+    "action": "clickElement",
+    "params": { 
+      "selector": "<selector>", 
+      "selectorType": "id|css|xpath|text" 
+    },
+    "reasoning": "Submit the search.",
+    "phaseCompleted": false,
+    "completed": true
+  }
+]
+
+========================  INPUTS  ========================
+Screenshot: <screenshotPath>
 User Query: ${query}
 
-Respond ONLY with valid JSON in this format:
-[
-    {
-        "action": "functionName",
-        "params": {
-            "selector": "element_selector",
-            "selectorType": "id|css|xpath|text",
-            "text": "text_to_fill" // only for fillInput
-        },
-        "reasoning": "Brief explanation",
-        "phaseCompleted": false, // set to true if this action ends the current phase (e.g., navigation)
-        "completed": false // set to true ONLY in the last action if the user's query is fully completed
-    }
-]
+======================== IMPORTANT INSTRUCTION ===============
+- Do not generate more than 3 actions.
+- Only generate the minimum number of actions only for that phase.
+- Please analyse the attached screenshot as well so that there is no redundancy, generate the actions cleverly. Check if that action has already taken place, if yes then dont generate that action again, generate further actions.
+- For xpath use full XPath beginning with // or / and using @ for attributes.
+- **Do NOT use an input field (such as a text box) as a click target for submitting a search or form. Only click actual buttons or elements intended for submission.**
+- **For submitting a search or form, prefer clicking a button rather than the input field itself.**
+- **Never use the placeholder text of an input as a selector for a button click. Only use it for identifying input fields to type into.**
+- If you are unsure about the selector or selectorType, rely on the screenshot and the visible text. For selectorType 'text', use a short, unique, and stable substring of the visible text (not the entire text) to identify the element.
+Previous Actions (last 3): ${JSON.stringify(previousActions)}
+
+========================  OUTPUT  ========================
+Return only the JSON array of actions that satisfies the query and adheres strictly to all rules above. Do NOT output anything else.
 `;
 
-            const message = new HumanMessage({
-                content: [
-                    {
-                        type: "text",
-                        text: systemPrompt
-                    },
-                    {
-                        type: "image_url",
-                        image_url: {
-                            url: `data:image/png;base64,${base64Image}`
-                        }
-                    }
-                ]
-            });
 
-            const response = await this.model.invoke([message]);
-            const responseText = response.content.trim();
-            console.log('Raw LLM response (analyzeScreenshotAndQuery):', responseText);
-            
-            try {
-                const parsed = JSON.parse(responseText);
-                console.log('Successfully parsed JSON (analyzeScreenshotAndQuery):', parsed);
-                return parsed;
-            } catch (parseError) {
-                console.error('JSON parse error (analyzeScreenshotAndQuery):', parseError);
-                console.error('Failed to parse LLM response:', responseText);
-                throw new Error('Invalid JSON response from LLM');
-            }
+		const message = new HumanMessage({
+			content: [
+				{ type: "text", text: prompt },
+				{ type: "image_url", image_url: { url: `data:image/png;base64,${base64Image}` } }
+			]
+		});
 
-        } catch (error) {
-            console.error('Error in LLM analysis:', error);
-            throw error;
-        }
-    }
+		const response = await this.model.invoke([message]);
+		let actions;
+		let raw;
+		try {
+			if (typeof response === "string") {
+				raw = response;
+			} else if (response && typeof response.content === "string") {
+				raw = response.content;
+			} else {
+				throw new Error("Unexpected LLM response format");
+			}
+			actions = extractFirstJsonArray(raw);
+			actions = ActionsArraySchema.parse(actions);
+		} catch (err) {
+			console.error("Raw LLM output:", raw);
+			throw new Error("Failed to parse or validate LLM output: " + err.message);
+		}
+		return actions;
+	}
 
-    async analyzeWithContext(screenshotPath, query, previousActions = []) {
-        try {
-            const imageBuffer = fs.readFileSync(screenshotPath);
-            const base64Image = imageBuffer.toString('base64');
 
-            const contextPrompt = previousActions.length > 0 
-                ? `\n\nPrevious actions taken: ${JSON.stringify(previousActions, null, 2)}`
-                : '';
+	// Add error recovery method similar to LLMService, using structured output
+	async handleActionError({ screenshotPath, query, previousActions = [], lastAction, error }) {
+		const imageBuffer = fs.readFileSync(screenshotPath);
+		const base64Image = imageBuffer.toString('base64');
+		const contextPrompt = previousActions.length > 0
+			? `\n\nPrevious actions taken: ${JSON.stringify(previousActions, null, 2)}`
+			: '';
 
-            const systemPrompt = `You are a browser automation assistant. Use your knowledge of common website structures and well-known sites (such as Amazon, Google, etc.) to select the most appropriate elements for automation. Use the screenshot only as a fallback reference if you cannot infer the structure from your knowledge.
+		const systemPrompt = `You are a browser automation assistant for a Node.js backend using Selenium WebDriver (with Chrome). The previous action failed with the following error: "${error}".
 
-Available functions:
-1. navigateToWebsite(website) - Navigate to a website
-2. clickElement(selector, selectorType) - Click a button, link, or any clickable element
-3. fillInput(selector, text, selectorType) - Fill an input field with text
-4. scrollToElement(selector, selectorType) - Scroll to bring an element into view
-5. waitForElement(selector, selectorType, timeout) - Wait for an element to appear
+========================  GENERAL RULES  ========================
+1. Return **only** the JSON array. Use double quotes for every JSON string.
+2. Every action object must contain:
+   • "action"           - one of: navigateToWebsite | clickElement | fillInput | scrollToElement | waitForElement  
+   • "params"           - see per-action requirements below  
+   • "reasoning"        - 1-sentence justification (assistants only; humans will not see it)  
+   • "phaseCompleted"   - true if the DOM will reload or change substantially after this action  
+   • "completed"        - true only if ${query} is achieved completely, refer to the screenshot as well for the confirmation.
+3. **Never output more than three actions.** If more steps are needed, end with phaseCompleted:true so the controller can call you again.
+4. Do not repeat the same action with identical params consecutively—adjust strategy instead.
+5. Favor **id** or **css** selectors, then **xpath**, and use **text** only if the text is short, visible, unique, and stable.
 
-Selector types: 'id', 'xpath', 'css', 'text' (for partial text match)
+========================  SELECTOR TYPES & EXACT SYNTAX  ========================
+• id  
+  - params.selector: the raw id value, WITHOUT “#” (e.g., "submitBtn")  
+• css  
+  - params.selector: any valid CSS selector (e.g., "#submitBtn", ".btn.primary", "div[data-role='item']")  
+• xpath  
+  - params.selector: full XPath beginning with // or / and using @ for attributes  
+    Examples: "//button[@type='submit']" , "//div[@data-test='card'][1]"  
+    NEVER mix CSS syntax inside an XPath.  
+• text  
+  - If you are unsure about the selector or selectorType, rely on the screenshot and the visible text on the element.
+  - params.selector: a short, unique, and stable substring of the visible text of a link or button (e.g., "Add to Cart" or a distinctive part of it). Do NOT use the entire long text, as OCR or screenshot text may be imperfect. Instead, use a partial but unique substring that is visible and likely to match only the intended element.
+  - Do **not** use placeholder, aria-label, tooltip, or long/dynamic strings.
 
-CRITICAL: For Amazon.in specifically, use these EXACT selectors:
-- Search input: selector="#twotabsearchtextbox", selectorType="id" 
-- Search button: selector="input[type='submit'][value='Go']", selectorType="css"
-- Product links: selector="[data-component-type='s-search-result'] h2 a", selectorType="css"
-- Add to cart: selector="#add-to-cart-button", selectorType="id"
+========================  PER-ACTION PARAMS  ========================
+1. navigateToWebsite  
+   params = { "website": "https://example.com" }   // full absolute URL
 
-EXAMPLES of CORRECT selectors for Amazon:
-✅ {"selector": "#twotabsearchtextbox", "selectorType": "id"} - FOR SEARCH INPUT
-✅ {"selector": "input[type='submit'][value='Go']", "selectorType": "css"} - FOR SEARCH BUTTON
+2. clickElement  
+   params = { "selector": "<selector>", "selectorType": "id|css|xpath|text" }
 
-EXAMPLES of WRONG selectors (NEVER USE):
-❌ {"selector": "Search Amazon.in", "selectorType": "id"} - This is placeholder text, not an ID!
-❌ {"selector": "input[type='text'][placeholder='Search Amazon.in']", "selectorType": "css"} - Too specific and fragile!
+3. fillInput  
+   params = { 
+     "selector": "<selector>", 
+     "selectorType": "id|css|xpath|text", 
+     "text": "<text to type>" 
+   }
 
-Rules:
-- NEVER use placeholder text, labels, or visible text as ID selectors
-- NEVER use selectorType="id" with text like "Search Amazon.in" - that's a placeholder, not an ID
-- For Amazon search: ALWAYS use "#twotabsearchtextbox" with selectorType="id"
-- For text selectors: Only use selectorType="text" with actual clickable text like button labels
-- For CSS selectors: Use selectorType="css" with proper CSS syntax
-- Always prioritize your knowledge of the website's structure (e.g., for Amazon, use known input/search bar ids, button classes, etc.).
-- For product listings on Amazon, prefer using known container classes (like 's-result-item'), data attributes (like 'data-asin'), or predictable CSS selectors for product links/buttons. Do NOT use visible product titles or dynamic text as selectors. Prefer clicking the first product by index or container, not by text.
-- Do NOT use long product titles, dynamic text, or placeholder/label text as selectors. Prefer unique, stable selectors (id, name, css, xpath).
-- Only use text selectors if the text is short, visible, and not a placeholder, label, or dynamic content.
-- Always wait for elements to be visible and enabled before clicking or interacting.
-- If an element is not interactable, suggest scrolling, waiting, or closing overlays/popups/modals before retrying.
-- Check for overlays, modals, or other UI elements that may block interaction and close or dismiss them if present.
-- Only select elements that are visible and interactable (not hidden, disabled, or off-screen).
-- If you are not sure an element is interactable, suggest a 'waitForElement' or 'scrollToElement' action before interacting.
-- If an action (like navigation or clicking a link/button) leads to a new page or significant DOM change, set "phaseCompleted": true for that action and stop generating further actions for this phase. Wait for the next screenshot before continuing.
-- Only set "completed": true in the last action if the user's query is fully completed.
-- ALWAYS return an array of actions, even if only one action is needed.
+4. scrollToElement  
+   params = { "selector": "<selector>", "selectorType": "id|css|xpath|text" }
 
-${contextPrompt}
+5. waitForElement  
+   params = { 
+     "selector": "<selector>", 
+     "selectorType": "id|css|xpath|text", 
+     "timeout": 5000 // optional, defaults to 5000 ms 
+   }
 
+========================  BEST PRACTICES  ========================
+• Before interacting with an element that might be off-screen or load late, insert a waitForElement or scrollToElement first.  
+• Avoid placeholder, aria-label, long class strings, and volatile attribute values.  
+• Use known stable ids on popular sites (e.g., Amazon search bar id "twotabsearchtextbox").  
+• If you are unsure about the selector or selectorType, rely on the screenshot and the visible text. For selectorType 'text', use a short, unique, and stable substring of the visible text (not the entire text) to identify the element. This helps avoid errors from OCR or long/dynamic text.
+• Set phaseCompleted:true on the last action before a full page reload (e.g., clicking a search button).  
+• Only set completed:true on the very final action that accomplishes the user's high-level goal.
+• Return a maximum of 3 actions, no more than that.
+• Do not generate actions beyond a phase, only generate actions up to that phase
+========================  SCHEMA TEMPLATE (DO NOT COPY VALUES)  ========================
+[
+  {
+    "action": "navigateToWebsite",
+    "params": { "website": "<url>" },
+    "reasoning": "Load the target site.",
+    "phaseCompleted": true,
+    "completed": false
+  },
+  {
+    "action": "fillInput",
+    "params": { 
+      "selector": "<selector>", 
+      "selectorType": "id|css|xpath|text", 
+      "text": "<text>" 
+    },
+    "reasoning": "Enter the user's search term.",
+    "phaseCompleted": false,
+    "completed": false
+  },
+  {
+    "action": "clickElement",
+    "params": { 
+      "selector": "<selector>", 
+      "selectorType": "id|css|xpath|text" 
+    },
+    "reasoning": "Submit the search.",
+    "phaseCompleted": false,
+    "completed": true
+  }
+]
+
+========================  INPUTS  ========================
+Screenshot: <screenshotPath>
 User Query: ${query}
 
-Respond ONLY with valid JSON in this format:
-[
-    {
-        "action": "functionName",
-        "params": {
-            "selector": "element_selector",
-            "selectorType": "id|css|xpath|text",
-            "text": "text_to_fill" // only for fillInput
-        },
-        "reasoning": "Brief explanation",
-        "phaseCompleted": false, // set to true if this action ends the current phase (e.g., navigation)
-        "completed": false // set to true ONLY in the last action if the user's query is fully completed
-    }
-]
+======================== IMPORTANT INSTRUCTION ===============
+- Since the previous action failed with the error ${error}, prefer relying on the screenshot and the visible text. For selectorType 'text', use a short, unique, and stable substring of the visible text (not the entire text) to identify the element.
+Previous Actions (last 3): ${JSON.stringify(previousActions)}
+- Do not generate more than 3 actions.
+- Only generate the minimum number of actions only for that phase.
+- Please analyse the attached screenshot as well so that there is no redundancy, generate the actions cleverly. Check if that action has already taken place, if yes then dont generate that action again, generate further actions.
+- For xpath use full XPath beginning with // or / and using @ for attributes.
+- **Do NOT use an input field (such as a text box) as a click target for submitting a search or form. Only click actual buttons or elements intended for submission.**
+- **For submitting a search or form, prefer clicking a button rather than the input field itself.**
+- **Never use the placeholder text of an input as a selector for a button click. Only use it for identifying input fields to type into.**
+
+========================  OUTPUT  ========================
+Return only the JSON array of actions that satisfies the query and adheres strictly to all rules above. Do NOT output anything else.
 `;
-
-            const message = new HumanMessage({
-                content: [
-                    {
-                        type: "text",
-                        text: systemPrompt
-                    },
-                    {
-                        type: "image_url",
-                        image_url: {
-                            url: `data:image/png;base64,${base64Image}`
-                        }
-                    }
-                ]
-            });
-
-            const response = await this.model.invoke([message]);
-            const responseText = response.content.trim();
-            console.log('Raw LLM response (analyzeWithContext):', responseText);
-            
-            try {
-                const parsed = JSON.parse(responseText);
-                console.log('Successfully parsed JSON (analyzeWithContext):', parsed);
-                return parsed;
-            } catch (parseError) {
-                console.error('JSON parse error (analyzeWithContext):', parseError);
-                console.error('Failed to parse LLM response:', responseText);
-                throw new Error('Invalid JSON response from LLM');
-            }
-
-        } catch (error) {
-            console.error('Error in contextual LLM analysis:', error);
-            throw error;
-        }
-    }
+		const message = new HumanMessage({
+			content: [
+				{ type: "text", text: systemPrompt },
+				{ type: "image_url", image_url: { url: `data:image/png;base64,${base64Image}` } }
+			]
+		});
+		const response = await this.model.invoke([message]);
+		let actions;
+		let raw;
+		try {
+			if (typeof response === "string") {
+				raw = response;
+			} else if (response && typeof response.content === "string") {
+				raw = response.content;
+			} else {
+				throw new Error("Unexpected LLM response format");
+			}
+			actions = extractFirstJsonArray(raw);
+			actions = ActionsArraySchema.parse(actions);
+		} catch (err) {
+			console.error("Raw LLM output:", raw);
+			throw new Error("Failed to parse or validate LLM output: " + err.message);
+		}
+		return actions;
+	}
 }
 
 module.exports = OllamaLLMService;
