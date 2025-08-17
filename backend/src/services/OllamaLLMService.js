@@ -5,7 +5,7 @@ const fs = require('fs');
 class OllamaLLMService {
     constructor() {
         this.model = new ChatOllama({
-            model: "qwen2.5vl", // Much better for vision-language tasks and UI understanding
+            model: "gemma3:12b", // Much better for vision-language tasks and UI understanding
             baseUrl: "https://emerging-cockatoo-informally.ngrok-free.app/", // Default Ollama URL
             temperature: 0.1,
             // Qwen2-VL is specifically designed for vision tasks and should provide better JSON responses
@@ -74,6 +74,8 @@ class OllamaLLMService {
            
            Use the HTML to identify exact IDs, classes, and elements. The HTML shows the real structure of the page.
            ` : ''}
+
+           IMPORTANT NOTE: Since we are sending a snippet of the top part of the html, there are chances that the html might not have the element we are looking for. In that case rely on which would be the actual text visible in the screenshot itself. the screenshot and use the selectorType as text, with an appropriate short enough selector. Dont refer to the htmlContent at all if we are referring the screenshot, the selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
            
            **TASK:** ${query}
            
@@ -154,6 +156,8 @@ class OllamaLLMService {
             
             Use the HTML to identify exact IDs, classes, and elements. The HTML shows the real structure of the page.
             ` : ''}
+
+            IMPORTANT NOTE: Since we are sending a snippet of the top part of the html, there are chances that the html might not have the element we are looking for. In that case rely on the screenshot and use the selectorType as text, with an appropriate short enough selector which would be the actual text visible in the screenshot itself. Dont refer to the htmlContent at all if we are referring the screenshot, the selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
             
             **ORIGINAL TASK:** ${query}
             
@@ -232,7 +236,7 @@ class OllamaLLMService {
                         const base64Image = imageBuffer.toString('base64');
             
                         const systemPrompt = `
-                        You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase. Analyze the provided screenshot and HTML to generate browser actions that fulfill the user's request.
+                        You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase. Analyze the provided screenshot to generate browser actions that fulfill the user's request.
                         The previous action failed. Generate recovery actions to continue the task.
             
             **ORIGINAL TASK:** ${query}
@@ -240,12 +244,7 @@ class OllamaLLMService {
             **ERROR:** ${error}
             ${interceptingElement ? `**INTERCEPTING ELEMENT:** ${interceptingElement}` : ''}
 
-            ${cleanHTML ? `
-            **PRIORITIZE THIS HTML STRUCTURE FIRST:**
-            ${cleanHTML}
-            
-            Use the HTML to identify exact IDs, classes, and elements. The HTML shows the real structure of the page.
-            ` : ''}
+            Prefer relying on the screenshot and use the selectorType as text, with an appropriate short enough selector which would be the actual text visible in the screenshot itself.  The selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
             
             **RECOVERY RULES:**
             1. Return ONLY a JSON array of actions (no markdown, no explanation)
@@ -278,7 +277,7 @@ class OllamaLLMService {
             - xpath: Full XPath starting with // or / (e.g., "//button[@type='submit']", "//div[@class='cart']")
             - text: Very short unique visible text, max 10 chars (e.g., "Submit", "Add", "Search")
             
-            **IMPORTANT:** Only use selectors for elements that are actually visible in the screenshot.
+            **IMPORTANT:** Only use selectors for elements that are actually visible in the screenshot. Since the previous action failed try preferring selecting the element with selectorType as text and and an appropriate selector(Use small text so there is less chances of mismatch), which would be the actual text visible in the screenshot of the element to be clicked.  The selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
             
             Generate recovery actions:`;
 
