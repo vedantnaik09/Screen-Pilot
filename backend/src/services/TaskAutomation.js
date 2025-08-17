@@ -1,6 +1,6 @@
 const browserSessionManager = require("./BrowserSessionManager");
-const LLMService = require("./LLMService");
-const OllamaLLMService = require("./OllamaLLMService");
+// const LLMService = require("./LLMService");
+const LLMService = require("./OllamaLLMService");
 
 class TaskAutomation {
     async startTask(options) {
@@ -15,22 +15,30 @@ class TaskAutomation {
         console.log(`📊 TASK STATE: completed=${completed}, phase=${phase}`);
 
         while (!completed) {
+
             try {
                 console.log(`\n[Phase ${phase}] Taking screenshot...`);
                 screenshotPath = await browserAutomation.takeScreenshot();
-                
+
                 console.log(`[Phase ${phase}] Getting clean HTML for context...`);
-                const cleanHTML = await browserAutomation.getCleanHTML();
-                console.log(`[Phase ${phase}] Clean HTML length: ${cleanHTML.length} characters`);
+                let htmlSnippet = await browserAutomation.getCleanHTML();
+                console.log(`[Phase ${phase}] HTML snippet length: ${htmlSnippet.length} characters`);
 
                 let actions;
                 if (phase === 0) {
-                    console.log(`[Phase ${phase}] Calling analyzeScreenshotAndQuery...`);
-                    actions = await llmService.analyzeScreenshotAndQuery(screenshotPath, options.query, cleanHTML);
+                    // Refresh htmlSnippet immediately before the LLM call to ensure latest DOM
+                    htmlSnippet = await browserAutomation.getCleanHTML();
+                    console.log(`[Phase ${phase}] Calling analyzeScreenshotAndQuery (htmlSnippet length: ${htmlSnippet.length})...`);
+                    actions = await llmService.analyzeScreenshotAndQuery(screenshotPath, options.query, htmlSnippet);
                 } else {
+                    // Refresh htmlSnippet immediately before the LLM call to ensure latest DOM
+                    htmlSnippet = await browserAutomation.getCleanHTML();
                     console.log(`[Phase ${phase}] Calling analyzeWithContext with previous actions:`, previousActions.slice(-3));
-                    actions = await llmService.analyzeWithContext(screenshotPath, options.query, previousActions.slice(-3), cleanHTML);
+                    console.log(`[Phase ${phase}] analyzeWithContext htmlSnippet length: ${htmlSnippet.length}`);
+                    actions = await llmService.analyzeWithContext(screenshotPath, options.query, previousActions.slice(-3), htmlSnippet);
                 }
+
+                // Use actions returned by LLM as-is; LLM is instructed to make any phaseCompleted:true action the final action.
 
                 if (!Array.isArray(actions) || actions.length === 0) {
                     console.log(`[Phase ${phase}] No actions returned by the LLM`);
@@ -47,13 +55,17 @@ class TaskAutomation {
                     console.log(`[Phase ${phase}] 📝 Error details:`, executionResult.error.message);
                     console.log(`[Phase ${phase}] 🔧 Failed action:`, executionResult.lastAction);
                     
+                    // Refresh htmlSnippet before error recovery call
+                    const refreshedHtmlSnippet = await browserAutomation.getCleanHTML();
+                    console.log(`[Phase ${phase}] Calling handleActionError with refreshed htmlSnippet length: ${refreshedHtmlSnippet.length}`);
                     const errorActions = await llmService.handleActionError({
                         screenshotPath,
                         query: options.query,
                         previousActions: previousActions.slice(-3),
                         lastAction: executionResult.lastAction,
                         error: executionResult.error.message,
-                        interceptingElement: executionResult.interceptingElement
+                        interceptingElement: executionResult.interceptingElement,
+                        htmlSnippet: refreshedHtmlSnippet
                     });
 
                     if (Array.isArray(errorActions) && errorActions.length > 0) {
@@ -97,7 +109,15 @@ class TaskAutomation {
 
     async executeActionsArray(browserAutomation, actions, phase, previousActions, isErrorRecovery = false) {
         const prefix = isErrorRecovery ? "fallback " : "";
-        
+        // If the LLM returned an action with phaseCompleted=true, ignore any actions that come after it.
+        if (Array.isArray(actions) && actions.length > 0) {
+            const idx = actions.findIndex(a => a && a.phaseCompleted === true);
+            if (idx !== -1 && idx < actions.length - 1) {
+                console.warn(`LLM returned ${actions.length} actions but action ${idx} has phaseCompleted=true; ignoring ${actions.length - (idx + 1)} trailing actions.`);
+                actions = actions.slice(0, idx + 1);
+            }
+        }
+
         for (const [i, actionObj] of actions.entries()) {
             console.log(`[Phase ${phase}] Executing ${prefix}action ${i + 1}/${actions.length}:`, actionObj);
             
@@ -197,6 +217,8 @@ class TaskAutomation {
     async closeTask() {
         await browserSessionManager.closeBrowser();
     }
+
+    // No manual truncation: LLM is responsible for ordering actions ensuring any phaseCompleted:true action is last.
 }
 
 module.exports = TaskAutomation;

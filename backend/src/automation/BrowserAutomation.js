@@ -167,65 +167,107 @@ class BrowserAutomation {
         return this.driver.getPageSource();
     }
 
-    async getCleanHTML() {
-        // Get clean HTML without scripts, styles, and unnecessary attributes
-        const cleanHTML = await this.driver.executeScript(`
-            function cleanElement(element) {
-                if (!element) return '';
-                
-                // Skip script, style, noscript tags
-                if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'META', 'LINK'].includes(element.tagName)) {
-                    return '';
-                }
-                
-                let result = '<' + element.tagName.toLowerCase();
-                
-                // Only include useful attributes
-                const keepAttributes = ['id', 'class', 'type', 'value', 'placeholder', 'alt', 'title', 'href', 'src'];
-                for (let attr of keepAttributes) {
-                    if (element.hasAttribute(attr)) {
-                        let value = element.getAttribute(attr);
-                        // Truncate long values
-                        if (value && value.length > 50) {
-                            value = value.substring(0, 50) + '...';
-                        }
-                        result += ' ' + attr + '="' + (value || '') + '"';
-                    }
-                }
-                result += '>';
-                
-                // Get text content (truncated)
-                let textContent = '';
-                for (let child of element.childNodes) {
-                    if (child.nodeType === 3) { // Text node
-                        textContent += child.textContent.trim();
-                    }
-                }
-                if (textContent && textContent.length > 100) {
-                    textContent = textContent.substring(0, 100) + '...';
-                }
-                
-                // Process children
-                let childrenHTML = '';
-                for (let child of element.children) {
-                    childrenHTML += cleanElement(child);
-                }
-                
-                if (textContent && !childrenHTML) {
-                    result += textContent;
-                } else if (childrenHTML) {
-                    result += childrenHTML;
-                }
-                
-                result += '</' + element.tagName.toLowerCase() + '>';
-                return result;
+
+  // Return a compact HTML snippet containing only visible, interactive elements
+  // This is intended to be small and useful for the LLM (ids, classes, names, placeholders, text)
+  async getCleanHTML(maxChars = 5000, maxElements = 150) {
+    const snippet = await this.driver.executeScript(function (maxChars, maxElements) {
+      function isVisible(el) {
+        try {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0 && style && style.visibility !== 'hidden' && style.display !== 'none' && el.offsetParent !== null;
+        } catch (e) { return false; }
+      }
+      function truncate(s, n) { if (!s) return ''; return s.length > n ? s.slice(0, n) + '...' : s; }
+
+      const keepAttrs = ['id','class','name','type','placeholder','value','href','src','alt','title','role','aria-label','data-testid'];
+      const selectors = 'input,button,a,select,textarea,form,img,[role], [onclick],[data-testid]';
+      const nodes = Array.from(document.querySelectorAll(selectors));
+      const outputParts = [];
+
+      // page metadata
+      const title = document.title || '';
+      const metaDesc = (document.querySelector('meta[name="description"]')||{}).content || '';
+      outputParts.push(`<meta title="${truncate(title,200)}">`);
+      if (metaDesc) outputParts.push(`<meta description="${truncate(metaDesc,300)}">`);
+
+      let count = 0;
+      for (const n of nodes) {
+        if (count >= maxElements) break;
+        if (!isVisible(n)) continue;
+
+        const tag = n.tagName.toLowerCase();
+        const attrPairs = [];
+        for (const a of keepAttrs) {
+          try {
+            if (a === 'class') {
+              const cls = n.className && typeof n.className === 'string' ? n.className.split(/\s+/).slice(0,3).join(' ') : '';
+              if (cls) attrPairs.push(`class="${truncate(cls,80)}"`);
+            } else if (a === 'value') {
+              const v = n.value || '';
+              if (v) attrPairs.push(`value="${truncate(String(v),120)}"`);
+            } else if (n.hasAttribute && n.hasAttribute(a)) {
+              attrPairs.push(`${a}="${truncate(n.getAttribute(a),120)}"`);
+            } else if ((a === 'href' || a === 'src') && (n[a] || n.getAttribute && n.getAttribute(a))) {
+              const v = n[a] || (n.getAttribute && n.getAttribute(a));
+              if (v) attrPairs.push(`${a}="${truncate(v,160)}"`);
             }
-            
-            return cleanElement(document.body);
-        `);
-        
-        return cleanHTML;
+          } catch (e) {}
+        }
+
+        let text = '';
+        try {
+          text = (n.innerText || n.textContent || '').trim().replace(/\s+/g, ' ');
+          if (!text && (n.placeholder || n.getAttribute && n.getAttribute('placeholder'))) {
+            text = n.placeholder || '';
+          }
+        } catch (e) { text = ''; }
+
+        const snippetHtml = `<${tag} ${attrPairs.join(' ')}>${truncate(text, 200)}</${tag}>`;
+        outputParts.push(snippetHtml);
+        count++;
+
+        const joined = outputParts.join('\n');
+        if (joined.length > maxChars) break;
+      }
+
+      return outputParts.join('\n').slice(0, maxChars);
+    }, maxChars, maxElements);
+
+      // Auto-save the cleaned HTML to disk for logging/inspection.
+      try {
+        const defaultDir = path.join('logs', 'html-snippets');
+        const finalPath = path.join(defaultDir, `${new Date().toISOString().replace(/:/g, '-')}.html`);
+        await fs.ensureDir(path.dirname(finalPath));
+        await fs.writeFile(finalPath, snippet, 'utf8');
+        console.log('Saved HTML snippet to', finalPath);
+      } catch (err) {
+        // Do not fail the caller if logging fails — just warn.
+        console.log('Failed to auto-save HTML snippet', err && err.message ? err.message : err);
+      }
+
+      return snippet;
+  }
+
+  // Save the cleaned HTML to a file. If filePath is omitted a timestamped file will be created under logs/html-snippets.
+  async saveCleanHTMLToFile(filePath = null, maxChars = 5000, maxElements = 150) {
+    const html = await this.getCleanHTML(maxChars, maxElements);
+    try {
+      const defaultDir = path.join('logs', 'html-snippets');
+      const finalPath = filePath
+        ? filePath
+        : path.join(defaultDir, `${new Date().toISOString().replace(/:/g, '-')}.html`);
+
+      await fs.ensureDir(path.dirname(finalPath));
+      await fs.writeFile(finalPath, html, 'utf8');
+      console.log('Saved HTML snippet to', finalPath);
+      return finalPath;
+    } catch (err) {
+      console.log('Failed to save HTML snippet', err);
+      throw err;
     }
+  }
 
     async dismissOverlays() {
         console.log("Checking for common overlays or popups to dismiss...");
