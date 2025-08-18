@@ -32,8 +32,8 @@ NOTE: The html content would only have elements and ids of the top part of the c
 **RULES:**
 1. Return ONLY a JSON array of actions (no markdown, no explanation)
 2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
-3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
-4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
+3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement
+4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement
 5. Use short text selectors (max 15 characters) to avoid XPath errors
 6. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. For the navigation or dom change set phaseCompleted as true. No subsequent actions should be generated after an action which would cause dom change or navigation.
 7. Set "completed": true ONLY when this current action will finish the execution of the query: ${query}
@@ -45,7 +45,6 @@ NOTE: The html content would only have elements and ids of the top part of the c
 - clickElement: { "selector": "element-id", "selectorType": "id" }
 - fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
 - scrollToElement: { "selector": "element-id", "selectorType": "id" }
-- waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
 
 **SELECTOR TYPES & FORMATS:**
 - id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")
@@ -117,8 +116,8 @@ ${JSON.stringify(previousActions, null, 2)}
 **RULES:**
 1. Return ONLY a JSON array of actions (no markdown, no explanation)
 2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
-3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
-4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
+3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement
+4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement
 5. Use short text selectors (max 15 characters) to avoid XPath errors
 6. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. For the navigation or dom change set phaseCompleted as true. No subsequent actions should be generated after an action which would cause dom change or navigation.
 7. Set "completed": true ONLY when this current action will finish the execution of the query: ${query}
@@ -131,7 +130,6 @@ ${JSON.stringify(previousActions, null, 2)}
 - clickElement: { "selector": "element-id", "selectorType": "id" }
 - fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
 - scrollToElement: { "selector": "element-id", "selectorType": "id" }
-- waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
 
 **SELECTOR TYPES & FORMATS:**
 - id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")
@@ -193,8 +191,8 @@ ${interceptingElement ? `**INTERCEPTING ELEMENT:** ${interceptingElement}` : ''}
 **RECOVERY RULES:**
 1. Return ONLY a JSON array of actions (no markdown, no explanation)
 2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
-3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
-4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
+3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement
+4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement
 5. Try different selectors or approaches to fix the error
 6. If click was intercepted, try clicking the intercepting element instead
 7. For "element not interactable" errors, try scrolling or waiting first
@@ -205,13 +203,13 @@ ${interceptingElement ? `**INTERCEPTING ELEMENT:** ${interceptingElement}` : ''}
 12. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. For the navigation or dom change set phaseCompleted as true. No subsequent actions should be generated after an action which would cause dom change or navigation.
 13. Set "completed": true ONLY when this current action will finish the execution of the query: ${query}
 14. Don't repeat previous actions unless necessary
+15. If you are searching for an input field, note that it may contain a placeholder and you wont be able to search it with text directly so in that case use appropriate xpath.
 
 **ACTION PARAMETER FORMATS:**
 - navigateToWebsite: { "website": "https://example.com" }
 - clickElement: { "selector": "element-id", "selectorType": "id" }
 - fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
 - scrollToElement: { "selector": "element-id", "selectorType": "id" }
-- waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
 
 **SELECTOR TYPES & FORMATS:**
 - id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")

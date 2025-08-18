@@ -236,13 +236,20 @@ class BrowserAutomation {
         try {
           const rect = el.getBoundingClientRect();
           const style = window.getComputedStyle(el);
-          return rect.width > 0 && rect.height > 0 && style && style.visibility !== 'hidden' && style.display !== 'none' && el.offsetParent !== null;
+          // Some interactive elements (inputs inside flex containers, shadow DOM, or transformed nodes)
+          // may not have an offsetParent but are still visible. Use bounding rects or client rects
+          // as additional indicators of visibility.
+          const hasDimensions = rect.width > 0 && rect.height > 0;
+          const hasClientRects = el.getClientRects && el.getClientRects().length > 0;
+          const visibleStyle = style && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+          const attached = el.offsetParent !== null;
+          return visibleStyle && (hasDimensions || hasClientRects || attached);
         } catch (e) { return false; }
       }
       function truncate(s, n) { if (!s) return ''; return s.length > n ? s.slice(0, n) + '...' : s; }
 
-      const keepAttrs = ['id','class','name','type','placeholder','value','href','src','alt','title','role','aria-label','data-testid'];
-      const selectors = 'input,button,a,select,textarea,form,img,[role], [onclick],[data-testid]';
+  const keepAttrs = ['id','class','name','type','placeholder','value','href','src','alt','title','role','aria-label','data-testid','enterkeyhint','maxlength'];
+  const selectors = 'input,button,a,select,textarea,form,img,[role],[onclick],[data-testid]';
       const nodes = Array.from(document.querySelectorAll(selectors));
       const outputParts = [];
 
@@ -255,9 +262,35 @@ class BrowserAutomation {
       let count = 0;
       for (const n of nodes) {
         if (count >= maxElements) break;
-        if (!isVisible(n)) continue;
 
-        const tag = n.tagName.toLowerCase();
+        // Determine tag early because we use it to decide inclusion even when not visible
+        const tag = (n.tagName || '').toLowerCase();
+
+        // Include element if visible OR if it's an input (or contains an input) with identifying attrs
+        let include = false;
+        try {
+          if (isVisible(n)) {
+            include = true;
+          } else {
+            // Inputs with placeholder/name or type text/search should be included even if CSS makes them hard to measure
+            if (tag === 'input') {
+              const p = (n.getAttribute && (n.getAttribute('placeholder') || n.getAttribute('name') || n.getAttribute('aria-label'))) || '';
+              const t = (n.getAttribute && (n.getAttribute('type') || '')).toLowerCase();
+              if (p || t === 'text' || t === 'search') include = true;
+            }
+            // Include forms/spans/divs that contain such inputs
+            if (!include && (tag === 'form' || tag === 'span' || tag === 'div')) {
+              const inner = n.querySelector && n.querySelector('input[placeholder], input[name], input[type="text"], input[type="search"]');
+              if (inner) include = true;
+            }
+          }
+        } catch (e) {
+          // on error, skip
+          continue;
+        }
+
+        if (!include) continue;
+
         const attrPairs = [];
         for (const a of keepAttrs) {
           try {
