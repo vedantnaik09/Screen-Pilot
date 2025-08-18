@@ -4,22 +4,26 @@ const fs = require('fs');
 
 class OllamaLLMService {
     constructor() {
-        this.model = new ChatOllama({
-            model: "gemma3:12b", // Much better for vision-language tasks and UI understanding
-            baseUrl: "https://emerging-cockatoo-informally.ngrok-free.app/", // Default Ollama URL
+        // Lightweight vision model for fast OCR and element listing (smaller / faster)
+        this.visionModel = new ChatOllama({
+            model: "qwen2.5vl", // lighter & faster for simple OCR/element listing
+            baseUrl: "https://emerging-cockatoo-informally.ngrok-free.app/",
+            temperature: 0,
+        });
+
+        // Text model for action generation
+        this.textModel = new ChatOllama({
+            model: "llama3.1:8b", // Text model for action planning
+            baseUrl: "https://emerging-cockatoo-informally.ngrok-free.app/",
             temperature: 0.1,
-            // Qwen2-VL is specifically designed for vision tasks and should provide better JSON responses
         });
     }
 
-    // Helper to robustly extract JSON from LLM responses that may include
-    // markdown fences (```json ... ```), surrounding commentary, or extra
-    // whitespace. Returns the parsed object or throws a descriptive error.
+    // Helper to robustly extract JSON from LLM responses
     parseJsonFromResponse(responseText) {
         let text = (responseText || '').trim();
 
         // Remove common triple-backtick fences and optional language tags
-        // e.g. ```json\n...\n```
         text = text.replace(/^```(?:\w+)?\s*/i, '');
         text = text.replace(/\s*```$/i, '');
 
@@ -57,236 +61,26 @@ class OllamaLLMService {
         }
     }
 
-
-
-    // No longer require pageSource as a parameter
-    async analyzeScreenshotAndQuery(screenshotPath, query, cleanHTML) {
-        try {
-            // Read and encode screenshot
-           const imageBuffer = fs.readFileSync(screenshotPath);
-                       const base64Image = imageBuffer.toString('base64');
-           
-                       const systemPrompt = `You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase. Analyze the provided screenshot and HTML to generate browser actions that fulfill the user's request.
-           
-           ${cleanHTML ? `
-           **PRIORITIZE THIS HTML STRUCTURE FIRST:**
-           ${cleanHTML}
-           
-           Use the HTML to identify exact IDs, classes, and elements. The HTML shows the real structure of the page.
-           ` : ''}
-
-           IMPORTANT NOTE: Since we are sending a snippet of the top part of the html, there are chances that the html might not have the element we are looking for. In that case rely on which would be the actual text visible in the screenshot itself. the screenshot and use the selectorType as text, with an appropriate short enough selector. Dont refer to the htmlContent at all if we are referring the screenshot, the selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
-           
-           **TASK:** ${query}
-           
-           **RULES:**
-           1. Return ONLY a JSON array of actions (no markdown, no explanation)
-           2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
-           3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
-           4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
-           5. Use short text selectors (max 15 characters) to avoid XPath errors
-           6. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. It would be true for the last action of the array. For the first navigation or dom change set phaseCompleted as true and that would be the last action of the array.
-           7. Set "completed": true ONLY when this current action will supposedly finish the execution of the query : ${query}
-           8. Generate maximum 3 actions per response
-           9. Only generate actions for elements visible in the screenshot or HTML
-           10. If a required element is not visbile you may scroll to it in order to see it properly.
-           
-           **ACTION PARAMETER FORMATS:**
-           - navigateToWebsite: { "website": "https://example.com" }
-           - clickElement: { "selector": "element-id", "selectorType": "id" }
-           - fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
-           - scrollToElement: { "selector": "element-id", "selectorType": "id" }
-           - waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
-           
-           **SELECTOR TYPES & FORMATS:**
-           - id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")
-           - css: Full CSS selector WITH symbols (e.g., "#submit-btn", ".button", "input[type='submit']")
-           - xpath: Full XPath starting with // or / (e.g., "//button[@type='submit']", "//div[@class='cart']")
-           - text: Short unique visible text, max 15 chars (e.g., "Submit", "Add to Cart", "Search")
-           
-           **IMPORTANT:** Only use selectors for elements that are actually visible in the screenshot or present in the HTML structure provided.
-           
-           Return the JSON array:`;
-
-            const message = new HumanMessage({
-                content: [
-                    {
-                        type: "text",
-                        text: systemPrompt
-                    },
-                    {
-                        type: "image_url",
-                        image_url: {
-                            url: `data:image/png;base64,${base64Image}`
-                        }
-                    }
-                ]
-            });
-
-            const response = await this.model.invoke([message]);
-            const responseText = response.content.trim();
-            console.log('Raw LLM response (analyzeScreenshotAndQuery):', responseText);
-            
-            try {
-                const parsed = this.parseJsonFromResponse(responseText);
-                console.log('Successfully parsed JSON (analyzeScreenshotAndQuery):', parsed);
-                return parsed;
-            } catch (parseError) {
-                console.error('JSON parse error (analyzeScreenshotAndQuery):', parseError);
-                console.error('Original LLM response (analyzeScreenshotAndQuery):', responseText);
-                throw new Error('Invalid JSON response from LLM');
-            }
-
-        } catch (error) {
-            console.error('Error in LLM analysis:', error);
-            throw error;
-        }
-    }
-
-    async analyzeWithContext(screenshotPath, query, previousActions = [], cleanHTML) {
-        try {
-             const imageBuffer = fs.readFileSync(screenshotPath);
-                        const base64Image = imageBuffer.toString('base64');
-            
-                        const systemPrompt = `You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase. Continue the task based on the current screenshot and previous actions.
-            
-            ${cleanHTML ? `
-            **PRIORITIZE THIS HTML STRUCTURE FIRST:**
-            ${cleanHTML}
-            
-            Use the HTML to identify exact IDs, classes, and elements. The HTML shows the real structure of the page.
-            ` : ''}
-
-            IMPORTANT NOTE: Since we are sending a snippet of the top part of the html, there are chances that the html might not have the element we are looking for. In that case rely on the screenshot and use the selectorType as text, with an appropriate short enough selector which would be the actual text visible in the screenshot itself. Dont refer to the htmlContent at all if we are referring the screenshot, the selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
-            
-            **ORIGINAL TASK:** ${query}
-            
-            **PREVIOUS ACTIONS:**
-            ${JSON.stringify(previousActions, null, 2)}
-            
-            **RULES:**
-            1. Return ONLY a JSON array of actions (no markdown, no explanation)
-            2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
-            3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
-            4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
-            5. Use short text selectors (max 15 characters) to avoid XPath errors
-            6. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. It would be true for the last action of the array. For the first navigation or dom change set phaseCompleted as true and that would be the last action of the array.
-            7. Set "completed": true ONLY when this current action will supposedly finish the execution of the query : ${query}
-            8. Don't repeat previous actions unless necessary
-            9. Generate maximum 3 actions per response
-            10. Only generate actions for elements visible in the screenshot or HTML
-            11. If a required element is not visbile you may scroll to it in order to see it properly.
-            
-            **ACTION PARAMETER FORMATS:**
-            - navigateToWebsite: { "website": "https://example.com" }
-            - clickElement: { "selector": "element-id", "selectorType": "id" }
-            - fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
-            - scrollToElement: { "selector": "element-id", "selectorType": "id" }
-            - waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
-            
-            **SELECTOR TYPES & FORMATS:**
-            - id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")
-            - css: Full CSS selector WITH symbols (e.g., "#submit-btn", ".button", "input[type='submit']")
-            - xpath: Full XPath starting with // or / (e.g., "//button[@type='submit']", "//div[@class='cart']")
-            - text: Short unique visible text, max 15 chars (e.g., "Submit", "Add to Cart", "Search")
-            
-            **IMPORTANT:** Only use selectors for elements that are actually visible in the screenshot or present in the HTML structure provided.
-            
-            Continue the task from where it left off:`;
-
-            const message = new HumanMessage({
-                content: [
-                    {
-                        type: "text",
-                        text: systemPrompt
-                    },
-                    {
-                        type: "image_url",
-                        image_url: {
-                            url: `data:image/png;base64,${base64Image}`
-                        }
-                    }
-                ]
-            });
-
-            const response = await this.model.invoke([message]);
-            const responseText = response.content.trim();
-            console.log('Raw LLM response (analyzeWithContext):', responseText);
-            
-            try {
-                const parsed = this.parseJsonFromResponse(responseText);
-                console.log('Successfully parsed JSON (analyzeWithContext):', parsed);
-                return parsed;
-            } catch (parseError) {
-                console.error('JSON parse error (analyzeWithContext):', parseError);
-                console.error('Original LLM response (analyzeWithContext):', responseText);
-                throw new Error('Invalid JSON response from LLM');
-            }
-
-        } catch (error) {
-            console.error('Error in contextual LLM analysis:', error);
-            throw error;
-        }
-    }
-
-        // Handle error feedback and ask LLM for a new suggestion
-    async handleActionError({ screenshotPath, query, previousActions = [], lastAction, error, interceptingElement, cleanHTML}) {
+    // Step 1: Vision model analyzes screenshot for OCR and element listing
+    // Now accepts the original query and a maxElements cap to keep the call lightweight.
+    // Also requests a short "suggestion" string describing the recommended next action based on the screenshot + user query.
+    async analyzeScreenshotForElements(screenshotPath, query = '', maxElements = 6) {
         try {
             const imageBuffer = fs.readFileSync(screenshotPath);
-                        const base64Image = imageBuffer.toString('base64');
-            
-                        const systemPrompt = `
-                        You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase. Analyze the provided screenshot to generate browser actions that fulfill the user's request.
-                        The previous action failed. Generate recovery actions to continue the task.
-            
-            **ORIGINAL TASK:** ${query}
-            **FAILED ACTION:** ${JSON.stringify(lastAction, null, 2)}
-            **ERROR:** ${error}
-            ${interceptingElement ? `**INTERCEPTING ELEMENT:** ${interceptingElement}` : ''}
+            const base64Image = imageBuffer.toString('base64');
 
-            Prefer relying on the screenshot and use the selectorType as text, with an appropriate short enough selector which would be the actual text visible in the screenshot itself.  The selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
-            
-            **RECOVERY RULES:**
-            1. Return ONLY a JSON array of actions (no markdown, no explanation)
-            2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
-            3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
-            4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
-            5. Try different selectors or approaches to fix the error
-            6. If click was intercepted, try clicking the intercepting element instead
-            7. For "element not interactable" errors, try scrolling or waiting first
-            8. Use shorter text selectors (max 10 characters) to avoid XPath syntax errors
-            9. Generate maximum 3 recovery actions
-            10. DO NOT restart the task - continue from current state
-            11. Only generate actions for elements visible in the screenshot
-            12. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. It would be true for the last action of the array. For the first navigation or dom change set phaseCompleted as true and dont generate any more actions after that.
-            13. Set "completed": true ONLY when this current action will supposedly finish the execution of the query : ${query}
-            14. Don't repeat previous actions unless necessary
-            15. If a required element is not visbile you may scroll to it in order to see it properly.
-            16. If an action failed with the error "Wait timed out" it means that the element with that selector/selectorType combination does not exist and you will have to generate action with a different selector/selectorType.
-            
-            **ACTION PARAMETER FORMATS:**
-            - navigateToWebsite: { "website": "https://example.com" }
-            - clickElement: { "selector": "element-id", "selectorType": "id" }
-            - fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
-            - scrollToElement: { "selector": "element-id", "selectorType": "id" }
-            - waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
-            
-            **SELECTOR TYPES & FORMATS:**
-            - id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")
-            - css: Full CSS selector WITH symbols (e.g., "#submit-btn", ".button", "input[type='submit']")
-            - xpath: Full XPath starting with // or / (e.g., "//button[@type='submit']", "//div[@class='cart']")
-            - text: Very short unique visible text, max 10 chars (e.g., "Submit", "Add", "Search")
-            
-            **IMPORTANT:** Only use selectors for elements that are actually visible in the screenshot. Since the previous action failed try preferring selecting the element with selectorType as text and and an appropriate selector(Use small text so there is less chances of mismatch), which would be the actual text visible in the screenshot of the element to be clicked.  The selector would be the actual text which is displayed on the website screenshot in that case with selectorType as text.
-            
-            Generate recovery actions:`;
+            const visionPrompt = `I am trying to run a selenium code which performs actions automatically. For the current task I have received the following query: User query: "${query}"
+
+The query is only for reference. Rely on the screenshot completely to return me the elements which we can consider clicking on to progress further and complete the task eventually. The entire task is divided into subtasks, so you may receive the screenshot at any stage of the progress, assess the stage and the query carefully and only return the relevant elements to the user query which are present in the screenshot only, don't return anything outside of the screenshot. You don't have to decipher the actual elements, just determine the different interactable elements distinguished by the texts and return it. If you think the required element is not visible ask it to scroll the page to the element you would send as text.
+
+- Return JSON only in the following syntax: {"elements":[{"selectorFromAnalysis":"exact_visible_text","type":"text"}], "suggestion":<short suggested next action based on the screenshot and user query>}
+- MAX elements: ${maxElements}. If more exist, return the most relevant ones only.
+- The "suggestion" should be a very short sentence (max 100 characters) stating the most logical next action (e.g., "Click 'Sign in'", "Enter search term and submit", "Scroll to find 'Load more'"). If unsure, return an empty string. Along with the suggestion add a text indicating the current status(eg., "Searched for xyz successfully", "Currently on the product page")
+`;
 
             const message = new HumanMessage({
                 content: [
-                    {
-                        type: "text",
-                        text: systemPrompt
-                    },
+                    { type: "text", text: visionPrompt },
                     {
                         type: "image_url",
                         image_url: {
@@ -296,21 +90,261 @@ class OllamaLLMService {
                 ]
             });
 
-            const response = await this.model.invoke([message]);
+            const response = await this.visionModel.invoke([message]);
+            const responseText = (response.content || '').trim();
+            console.log('Raw Vision Model response:', responseText);
+
+            try {
+                const parsed = this.parseJsonFromResponse(responseText);
+
+                // Ensure parsed structure and enforce limits/trimming
+                const safe = { elements: [], suggestion: '' };
+
+                if (parsed && Array.isArray(parsed.elements)) {
+                    safe.elements = parsed.elements.slice(0, maxElements).map(e => {
+                        return {
+                            selectorFromAnalysis: (e.selectorFromAnalysis || '').toString().slice(0, 25),
+                            type: (e.type || '').toString()
+                        };
+                    });
+                }
+
+                if (parsed && typeof parsed.suggestion === 'string') {
+                    safe.suggestion = parsed.suggestion.trim().slice(0, 200);
+                } else if (parsed && parsed.suggestion) {
+                    safe.suggestion = String(parsed.suggestion).trim().slice(0, 200);
+                }
+
+                // Backwards compatibility: also expose `text` field for callers expecting the old shape
+                safe.elements = safe.elements.map(el => ({ ...el }));
+                
+                console.log('Successfully parsed Vision Model JSON with suggestion:', safe);
+                return safe;
+            } catch (parseError) {
+                console.error('JSON parse error (Vision Model):', parseError);
+                console.error('Original Vision Model response:', responseText);
+                throw new Error('Invalid JSON response from Vision Model');
+            }
+
+        } catch (error) {
+            console.error('Error in Vision Model analysis:', error);
+            throw error;
+        }
+    }
+
+    // Step 2: Text model generates actions based on vision analysis and HTML
+    async generateActionsFromAnalysis(query, visionAnalysis, cleanHTML, previousActions = []) {
+        try {
+            const suggestionText = visionAnalysis && visionAnalysis.suggestion ? `\n**SUGGESTED NEXT ACTION (from screenshot analysis):** ${visionAnalysis.suggestion}\n` : '';
+
+            const actionPrompt = `You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase.
+
+**ORIGINAL TASK:** ${query}
+
+**SCREENSHOT ANALYSIS:**
+${JSON.stringify(visionAnalysis, null, 2)}
+${cleanHTML ? `
+
+
+Please take this suggestion very seriously: ${suggestionText}
+If the above suggestions asks you to click on a certain element then click on it with the selectorType as "text" and perform the necessary action.
+We have done an ocr before this step, whose analysis is written above. The ocr will indicate all the relevant elements it recognizes by text, so you can rely on it for locating the element. The below html only provides a snippet of the truncated html which would likely indicate the top part of the page only, so it is likely that the elements in the html only include the header and the navbar, so verify if clicking on those buttons is relevant. If you think the element to be clicked is outside the html content rely solely on the screenshot analysis provided and use the selectorType as text for clicking buttons/links and the selector would be indicated by selectorFromAnalysis from the screenshot analysis. Elements with nav would indicate that they are navbar elements and are primarily used for navigation and not for performing any action, so if you are looking to perform an action refer to the screenshot analysis.
+
+**HTML STRUCTURE OF THE TOP PART ONLY:**
+${cleanHTML}
+
+ The html is only a snippet of the top part of the page so it may not cover the entire page. If you feel that is the case please rely on the screenshot analysis. If you find that the screenshot analysis differs from the html content then prefer to select the elements using the screenshot analysis.
+` : ''}
+
+${previousActions.length > 0 ? `
+**PREVIOUS ACTIONS:**
+${JSON.stringify(previousActions, null, 2)}
+` : ''}
+
+**RULES:**
+1. Return ONLY a JSON array of actions (no markdown, no explanation)
+2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
+3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
+4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
+5. Use the screenshot analysis to understand what elements are visible
+6. Prefer HTML selectors (id, css) when available, fallback to text selectors from screenshot analysis
+7. Use short text selectors (max 15 characters) to avoid XPath errors
+8. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. It would be true for the last action of the array. For the first navigation or dom change set phaseCompleted as true and that would be the last action of the array.
+9. Set "completed": true ONLY when this current action will finish the execution of the query: ${query}
+10. Generate maximum 3 actions per response
+11. Only generate actions for elements that are visible according to the screenshot analysis
+12. If a required element is not visible, you may scroll to it first
+13. Don't repeat previous actions unless necessary
+
+**ACTION PARAMETER FORMATS:**
+- navigateToWebsite: { "website": "https://example.com" }
+- clickElement: { "selector": "element-id", "selectorType": "id" }
+- fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
+- scrollToElement: { "selector": "element-id", "selectorType": "id" }
+- waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
+
+**SELECTOR TYPES & FORMATS:**
+- id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")
+- css: Full CSS selector WITH symbols (e.g., "#submit-btn", ".button", "input[type='submit']")
+- xpath: Full XPath starting with // or / (e.g., "//button[@type='submit']", "//div[@class='cart']")
+- text: Short unique visible text from screenshot analysis, max 15 chars (e.g., "Submit", "Add to Cart", "Search")
+
+**IMPORTANT:** 
+- Cross-reference the screenshot analysis with HTML structure to choose the best selectors
+- Prioritize elements that are confirmed visible in the screenshot analysis
+- Use exact text from the screenshot analysis for text selectors
+
+Generate the actions array:`;
+
+            const message = new HumanMessage({
+                content: [
+                    {
+                        type: "text",
+                        text: actionPrompt
+                    }
+                ]
+            });
+
+            const response = await this.textModel.invoke([message]);
             const responseText = response.content.trim();
-            console.log('Raw LLM response (handleActionError):', responseText);
+            console.log('Raw Text Model response:', responseText);
             
             try {
                 const parsed = this.parseJsonFromResponse(responseText);
-                console.log('Successfully parsed JSON (handleActionError):', parsed);
+                console.log('Successfully parsed Text Model JSON:', parsed);
                 return parsed;
             } catch (parseError) {
-                console.error('JSON parse error (handleActionError):', parseError);
-                console.error('Original LLM response (handleActionError):', responseText);
-                throw new Error('Invalid JSON response from LLM (error recovery)');
+                console.error('JSON parse error (Text Model):', parseError);
+                console.error('Original Text Model response:', responseText);
+                throw new Error('Invalid JSON response from Text Model');
             }
+
         } catch (error) {
-            console.error('Error in LLM error recovery:', error);
+            console.error('Error in Text Model action generation:', error);
+            throw error;
+        }
+    }
+
+    // Main function: Combines vision analysis with action generation
+    async analyzeScreenshotAndQuery(screenshotPath, query, cleanHTML) {
+        try {
+            console.log('Step 1: Analyzing screenshot with vision model...', screenshotPath);
+            // pass query and cap element count to keep it lightweight
+            const visionAnalysis = await this.analyzeScreenshotForElements(screenshotPath, query, 6);
+            
+            console.log('Step 2: Generating actions with text model...');
+            const actions = await this.generateActionsFromAnalysis(query, visionAnalysis, cleanHTML);
+            
+            return actions;
+        } catch (error) {
+            console.error('Error in analyzeScreenshotAndQuery:', error);
+            throw error;
+        }
+    }
+
+    // Main function with context: Combines vision analysis with action generation including previous actions
+    async analyzeWithContext(screenshotPath, query, previousActions = [], cleanHTML) {
+        try {
+            console.log('Step 1: Analyzing screenshot with vision model...', screenshotPath);
+            const visionAnalysis = await this.analyzeScreenshotForElements(screenshotPath, query, 6);
+            
+            console.log('Step 2: Generating actions with context using text model...');
+            const actions = await this.generateActionsFromAnalysis(query, visionAnalysis, cleanHTML, previousActions);
+            
+            return actions;
+        } catch (error) {
+            console.error('Error in analyzeWithContext:', error);
+            throw error;
+        }
+    }
+
+    // Error handling with two-model approach
+    async handleActionError({ screenshotPath, query, previousActions = [], lastAction, error, interceptingElement, cleanHTML}) {
+        try {
+            console.log('Step 1: Analyzing current state with vision model...');
+            const visionAnalysis = await this.analyzeScreenshotForElements(screenshotPath, query, 6);
+            
+            console.log('Step 2: Generating recovery actions with text model...');
+            const recoveryPrompt = `You are a browser automation assistant used by selenium. The previous action failed. Generate recovery actions to continue the task.
+
+**ORIGINAL TASK:** ${query}
+**FAILED ACTION:** ${JSON.stringify(lastAction, null, 2)}
+**ERROR:** ${error}
+${interceptingElement ? `**INTERCEPTING ELEMENT:** ${interceptingElement}` : ''}
+
+**CURRENT SCREENSHOT ANALYSIS:**
+${JSON.stringify(visionAnalysis, null, 2)}
+
+${cleanHTML ? `
+**HTML STRUCTURE:**
+${cleanHTML}
+` : ''}
+
+The html is only a snippet of the top part of the page so it may not cover the entire page. If you feel that is the case please rely on the screenshot analysis. If you find that the screenshot analysis differs from the html content then prefer to select the elements using the screenshot analysis.
+
+**RECOVERY RULES:**
+1. Return ONLY a JSON array of actions (no markdown, no explanation)
+2. Each action MUST have: "action", "params", "reasoning", "phaseCompleted", "completed"
+3. Available actions: navigateToWebsite, clickElement, fillInput, scrollToElement, waitForElement
+4. ALWAYS include "selectorType" in params for clickElement, fillInput, scrollToElement, waitForElement
+5. Try different selectors or approaches to fix the error
+6. If click was intercepted, try clicking the intercepting element instead
+7. For "element not interactable" errors, try scrolling or waiting first
+8. Use shorter text selectors (max 10 characters) to avoid XPath syntax errors
+9. Generate maximum 3 recovery actions
+10. DO NOT restart the task - continue from current state
+11. Only generate actions for elements visible in the screenshot analysis
+12. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. It would be true for the last action of the array. For the first navigation or dom change set phaseCompleted as true and that would be the last action of the array.
+13. Set "completed": true ONLY when this action will finish the query: ${query}
+14. Don't repeat previous actions unless necessary
+15. If a required element is not visible, you may scroll to it first
+16. If an action failed with "Wait timed out", the element doesn't exist - use different selector/selectorType
+
+**ACTION PARAMETER FORMATS:**
+- navigateToWebsite: { "website": "https://example.com" }
+- clickElement: { "selector": "element-id", "selectorType": "id" }
+- fillInput: { "selector": "input-id", "selectorType": "id", "text": "search term" }
+- scrollToElement: { "selector": "element-id", "selectorType": "id" }
+- waitForElement: { "selector": "element-id", "selectorType": "id", "timeout": 5000 }
+
+**SELECTOR TYPES & FORMATS:**
+- id: Raw ID value WITHOUT # symbol (e.g., "submit-btn", "search-box")
+- css: Full CSS selector WITH symbols (e.g., "#submit-btn", ".button", "input[type='submit']")
+- xpath: Full XPath starting with // or / (e.g., "//button[@type='submit']", "//div[@class='cart']")
+- text: Very short unique visible text from screenshot analysis, max 10 chars (e.g., "Submit", "Add", "Search")
+
+**IMPORTANT:** 
+- Use the screenshot analysis to identify what's actually visible
+- Prefer text selectors from screenshot analysis for failed actions
+- Try alternative approaches if the original selector failed
+
+Generate recovery actions:`;
+
+            const message = new HumanMessage({
+                content: [
+                    {
+                        type: "text",
+                        text: recoveryPrompt
+                    }
+                ]
+            });
+
+            const response = await this.textModel.invoke([message]);
+            const responseText = response.content.trim();
+            console.log('Raw Text Model recovery response:', responseText);
+            
+            try {
+                const parsed = this.parseJsonFromResponse(responseText);
+                console.log('Successfully parsed Text Model recovery JSON:', parsed);
+                return parsed;
+            } catch (parseError) {
+                console.error('JSON parse error (Text Model recovery):', parseError);
+                console.error('Original Text Model recovery response:', responseText);
+                throw new Error('Invalid JSON response from Text Model (error recovery)');
+            }
+
+        } catch (error) {
+            console.error('Error in handleActionError:', error);
             throw error;
         }
     }

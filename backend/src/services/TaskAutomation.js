@@ -1,6 +1,6 @@
 const browserSessionManager = require("./BrowserSessionManager");
-// const LLMService = require("./LLMService");
-const LLMService = require("./OllamaLLMService");
+const LLMService = require("./LLMService");
+// const LLMService = require("./OllamaLLMService");
 
 class TaskAutomation {
     async startTask(options) {
