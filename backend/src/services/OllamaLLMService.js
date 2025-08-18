@@ -73,9 +73,12 @@ class OllamaLLMService {
 
 The query is only for reference. Rely on the screenshot completely to return me the elements which we can consider clicking on to progress further and complete the task eventually. The entire task is divided into subtasks, so you may receive the screenshot at any stage of the progress, assess the stage and the query carefully and only return the relevant elements to the user query which are present in the screenshot only, don't return anything outside of the screenshot. You don't have to decipher the actual elements, just determine the different interactable elements distinguished by the texts and return it. If you think the required element is not visible ask it to scroll the page to the element you would send as text.
 
+IMPORTANT NOTE: If the page screenshot is blank return an empty json and tell it to navigate according to the user query in the suggestion.
+
 - Return JSON only in the following syntax: {"elements":[{"selectorFromAnalysis":"exact_visible_text","type":"text"}], "suggestion":<short suggested next action based on the screenshot and user query>}
 - MAX elements: ${maxElements}. If more exist, return the most relevant ones only.
-- The "suggestion" should be a very short sentence (max 100 characters) stating the most logical next action (e.g., "Click 'Sign in'", "Enter search term and submit", "Scroll to find 'Load more'"). If unsure, return an empty string. Along with the suggestion add a text indicating the current status(eg., "Searched for xyz successfully", "Currently on the product page")
+- The "suggestion" should be a very short sentence (max 100 characters) stating the most logical next action (e.g., "Click 'Sign in'", "Enter search term and submit", "Scroll to find 'Load more'"). If unsure, return an empty string. Along with the suggestion add a text indicating the current status(eg., "Searched for xyz successfully", "Currently on the product page").
+ The suggestion is to be given phase wise(ie A phase indicates the actions up until the point the DOM Content changes or navigation happens. So dont give suggestions beyond a phase)
 `;
 
             const message = new HumanMessage({
@@ -135,20 +138,23 @@ The query is only for reference. Rely on the screenshot completely to return me 
     // Step 2: Text model generates actions based on vision analysis and HTML
     async generateActionsFromAnalysis(query, visionAnalysis, cleanHTML, previousActions = []) {
         try {
-            const suggestionText = visionAnalysis && visionAnalysis.suggestion ? `\n**SUGGESTED NEXT ACTION (from screenshot analysis):** ${visionAnalysis.suggestion}\n` : '';
-
-            const actionPrompt = `You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase.
+            const actionPrompt = `You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase(A phase indicates actions upto the navigation change or dom content change or button click). Dont generate actions after any action that would cause these consequences: navigation change or dom content change or button click
 
 **ORIGINAL TASK:** ${query}
 
 **SCREENSHOT ANALYSIS:**
+Elements suggested by the screenshot analysis: ${visionAnalysis.elements}
+Please take this suggestion very seriously and only generate actions according to this suggestion, dont generate anything not relevant to this suggestion: ${visionAnalysis.suggestion}
+If the above suggestions asks you to click on a certain element then try if you can find that selector with its id or class in the below truncated html content, if you find it use that.
+If you dont find that element then select the element with selectorType:"text" and selector as selectorFromAnalysis(dont include # at the start of this).
+
+NOTE: The html content would only have elements and ids of the top part of the content, which likely covers the header and the navbar. So only choose the selectors from the html content if you think you are choosing the element from the truncated html. Selectors with "nav-" etc are majorly used for navigation and not for performing any actions. In that case rely on the above screenshot analysis suggestion.
+
+
 ${JSON.stringify(visionAnalysis, null, 2)}
 ${cleanHTML ? `
 
-
-Please take this suggestion very seriously: ${suggestionText}
-If the above suggestions asks you to click on a certain element then click on it with the selectorType as "text" and perform the necessary action.
-We have done an ocr before this step, whose analysis is written above. The ocr will indicate all the relevant elements it recognizes by text, so you can rely on it for locating the element. The below html only provides a snippet of the truncated html which would likely indicate the top part of the page only, so it is likely that the elements in the html only include the header and the navbar, so verify if clicking on those buttons is relevant. If you think the element to be clicked is outside the html content rely solely on the screenshot analysis provided and use the selectorType as text for clicking buttons/links and the selector would be indicated by selectorFromAnalysis from the screenshot analysis. Elements with nav would indicate that they are navbar elements and are primarily used for navigation and not for performing any action, so if you are looking to perform an action refer to the screenshot analysis.
+The below html only provides a snippet of the truncated html which would likely indicate the top part of the page only, so it is likely that the elements in the html only include the header and the navbar, so verify if clicking on those buttons is relevant. If you think the element to be clicked is outside the html content rely solely on the screenshot analysis provided and use the selectorType as text for clicking buttons/links and the selector would be indicated by selectorFromAnalysis from the screenshot analysis. Elements with nav would indicate that they are navbar elements and are primarily used for navigation and not for performing any action, so if you are looking to perform an action refer to the screenshot analysis.
 
 **HTML STRUCTURE OF THE TOP PART ONLY:**
 ${cleanHTML}
@@ -169,9 +175,9 @@ ${JSON.stringify(previousActions, null, 2)}
 5. Use the screenshot analysis to understand what elements are visible
 6. Prefer HTML selectors (id, css) when available, fallback to text selectors from screenshot analysis
 7. Use short text selectors (max 15 characters) to avoid XPath errors
-8. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. It would be true for the last action of the array. For the first navigation or dom change set phaseCompleted as true and that would be the last action of the array.
+8. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. For the navigation or dom change set phaseCompleted as true. No subsequent actions should be generated after an action which would cause dom change or navigation.
 9. Set "completed": true ONLY when this current action will finish the execution of the query: ${query}
-10. Generate maximum 3 actions per response
+10. Generate minimum number of actions upto 3 required to satisfy this suggestion: ${visionAnalysis.suggestion}
 11. Only generate actions for elements that are visible according to the screenshot analysis
 12. If a required element is not visible, you may scroll to it first
 13. Don't repeat previous actions unless necessary
@@ -193,6 +199,8 @@ ${JSON.stringify(previousActions, null, 2)}
 - Cross-reference the screenshot analysis with HTML structure to choose the best selectors
 - Prioritize elements that are confirmed visible in the screenshot analysis
 - Use exact text from the screenshot analysis for text selectors
+- navigateToWebsite action would always have phaseCompleted as true
+- If an action has phaseCompleted as true then dont generate anymore elements after that action element in the array.
 
 Generate the actions array:`;
 

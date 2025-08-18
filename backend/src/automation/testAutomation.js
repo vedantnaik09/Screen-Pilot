@@ -30,7 +30,7 @@ class BrowserAutomation {
       console.log("Unable to save screenshot", error);
     }
   }
-  async clickElement(selector, selectorType) {
+ async clickElement(selector, selectorType) {
     console.log(`Clicking button with ${selectorType}: ${selector}`);
     let element;
     switch (selectorType) {
@@ -45,10 +45,11 @@ class BrowserAutomation {
         break;
       case "text":
         // Find element by partial visible text (for buttons/links)
-        element = await this.driver.wait(
-          until.elementLocated(By.xpath(`//*[contains(normalize-space(text()), "${selector}")]`)),
+        const elements = await this.driver.wait(
+          until.elementsLocated(By.xpath(`//*[contains(normalize-space(text()), "${selector}")]`)),
           5000
         );
+        element = elements[elements.length - 1]
         break;
       default:
         throw new Error(`Unsupported selector type: ${selectorType}`);
@@ -133,7 +134,7 @@ class BrowserAutomation {
       await this.driver.wait(until.elementIsVisible(element), 5000);
       await this.driver.wait(until.elementIsEnabled(element), 5000);
     } catch (e) {
-      // continue even if waits fail
+      console.log("error ",e)
     }
 
     // Inspect elementFromPoint to find the actual top element at the center
@@ -194,7 +195,8 @@ class BrowserAutomation {
     await element.sendKeys(text);
   }
   async scrollToElement(selector, selectorType){
-    console.log("Request for scrolling to element");
+    try {
+      console.log("Request for scrolling to element");
     let element;
     switch (selectorType) {
       case "id":
@@ -207,18 +209,21 @@ class BrowserAutomation {
         element = await this.driver.wait(until.elementLocated(By.xpath(selector)), 5000);
         break;
       case "text":
-        element = await this.driver.wait(
-          until.elementLocated(By.xpath(`//*[contains(normalize-space(text()), "${selector}")]`)),
+        const elements = await this.driver.wait(
+          until.elementsLocated(By.xpath(`//*[contains(normalize-space(text()), "${selector}")]`)),
           5000
         );
+          element = elements[elements.length - 1]
         break;
       default:
         throw new Error(`Unsupported selector type: ${selectorType}`);
     }
-    await this.driver.executeScript("arguments[0].scrollIntoView(true)", element);
+    await this.driver.executeScript("arguments[0].scrollIntoView({block:'center',inline:'center'})", element);
     console.log("Scrolled to the element");
+    } catch (error) {
+      console.log("erorr",error)
+    }    
   }
-
   async waitForElement(selector, selectorType = 'id', timeout = 5000){
         console.log(`Waiting for element with ${selectorType}: ${selector}`);
         switch(selectorType) {
@@ -250,18 +255,19 @@ class BrowserAutomation {
 const browserAutomation = new BrowserAutomation();
 await browserAutomation.setup();
 await browserAutomation.navigateToWebsite("https://www.amazon.in/HP-Laptop-15-6-inch-Graphics-fc0154AU/dp/B0D3HG5CMG?crid=1ZFFHH5CVLD5H&dib=eyJ2IjoiMSJ9.xCWN7EW0bTvIb7BbRXXenz5tM6VOt4i1Vs4Z-zAZfgI9_qW7gQfQZmHGxsaYlX6egFg61ck9jRIBFxBWQ7ZKBUch64JuREfKtDTCIWNk1bUXlmygKm0cRumwqELOqm5mMlNEm-vkbQaO6OJi8i9IrobTM7yDcZ1AETw8misiVH0D7SaPV1W2ApHXw0JdNCq2DT25-wFkACfm3bt-q8xt6M6oJOJ8FDNWorCdlQxMwWA.RCuvNhT5YxQM2xSWoumEKcNbungR8R8MuPq0STihbdE&dib_tag=se&keywords=laptop&qid=1755458132&sprefix=laptop%2Caps%2C221&sr=8-3&th=1")
+await browserAutomation.clickElement("Add to Cart","text")
 
-const elements = await browserAutomation.driver.wait(
-          until.elementsLocated(By.xpath(`//*[contains(normalize-space(text()), "Add to Cart")]`)),
-          5000
-        );
+// const elements = await browserAutomation.driver.wait(
+//           until.elementsLocated(By.xpath(`//*[contains(normalize-space(text()), "Add to Cart")]`)),
+//           5000
+//         );
 
-try {
-  // prefer our robust JS-based click rather than WebElement.click() which can cause intercepted errors
-  await browserAutomation.clickRawElement(elements[2]);
-} catch (err) {
+// try {
+//   // prefer our robust JS-based click rather than WebElement.click() which can cause intercepted errors
+//   await browserAutomation.clickRawElement(elements[2]);
+// } catch (err) {
   
-
-}
+//   console.log("Error ",err)
+// }
 
 export default BrowserAutomation;

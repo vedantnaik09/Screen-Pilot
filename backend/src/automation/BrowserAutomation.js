@@ -30,58 +30,104 @@ class BrowserAutomation {
       console.log("Unable to save screenshot", error);
     }
   }
-  async clickElement(selector, selectorType) {
+ async clickElement(selector, selectorType) {
     console.log(`Clicking button with ${selectorType}: ${selector}`);
-    let element;
-    
-    try {
+        
       // Clean up selector if it has CSS-style prefix but selectorType is id  
       if (selectorType === 'id' && selector.startsWith('#')) {
         selector = selector.substring(1);
-      }
-      
-      switch (selectorType) {
-        case "id":
-          element = await this.driver.wait(until.elementLocated(By.id(selector)), 5000);
-          break;
-        case "xpath":
-          element = await this.driver.wait(until.elementLocated(By.xpath(selector)), 5000);
-          break;
-        case "css":
-          element = await this.driver.wait(until.elementLocated(By.css(selector)), 5000);
-          break;
-        case "text":
-          // Find element by partial visible text (for buttons/links)
-          // Use contains() with normalize-space() for better text matching
-          const xpathSelector = `//*[contains(normalize-space(text()), "${selector}") or contains(normalize-space(@value), "${selector}") or contains(normalize-space(@alt), "${selector}") or contains(normalize-space(@title), "${selector}")]`;
-          element = await this.driver.wait(
-            until.elementLocated(By.xpath(xpathSelector)),
-            5000
-          );
-          break;
-        default:
-          throw new Error(`Unsupported selector type: ${selectorType}`);
-      }
+      }     
+    
+    let element;
+    switch (selectorType) {
+      case "id":
+        element = await this.driver.wait(until.elementLocated(By.id(selector)), 5000);
+        break;
+      case "xpath":
+        element = await this.driver.wait(until.elementLocated(By.xpath(selector)), 5000);
+        break;
+      case "css":
+        element = await this.driver.wait(until.elementLocated(By.css(selector)), 5000);
+        break;
+      case "text":
+        // Find element by partial visible text (for buttons/links)
+        const elements = await this.driver.wait(
+          until.elementsLocated(By.xpath(`//*[contains(normalize-space(text()), "${selector}")]`)),
+          5000
+        );
+        element = elements[elements.length - 1]
+        break;
+      default:
+        throw new Error(`Unsupported selector type: ${selectorType}`);
+    }
+    // Make click more robust: scroll into view, ensure it's on top at center point,
+    // try a real sequence of mouse events, and fall back to JS click.
+    try {
+      await this.driver.executeScript("arguments[0].scrollIntoView({block: 'center', inline: 'center'})", element);
+      await this.driver.wait(until.elementIsVisible(element), 5000);
+      await this.driver.wait(until.elementIsEnabled(element), 5000);
 
-      // Wait for element to be clickable
-      await this.driver.wait(until.elementIsEnabled(element), 3000);
-      
-      // Scroll to element to ensure it's visible
-      await this.driver.executeScript("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", element);
-      
-      // Wait a moment for any animations to complete
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Try regular click first
-      await element.click();
-      
-    } catch (error) {
-      // If regular click fails, try JavaScript click as fallback
-      if (element && error.message.includes('not interactable')) {
-        console.log(`Regular click failed, trying JavaScript click...`);
-        await this.driver.executeScript("arguments[0].click();", element);
+      // Check which element is actually at the center point of our target
+      const topInfo = await this.driver.executeScript(
+        `const el = arguments[0];
+         const rect = el.getBoundingClientRect();
+         const cx = rect.left + rect.width/2;
+         const cy = rect.top + rect.height/2;
+         const top = document.elementFromPoint(cx, cy);
+         return {
+           rect: {x: rect.x, y: rect.y, w: rect.width, h: rect.height},
+           topTag: top ? top.tagName : null,
+           topId: top ? top.id : null,
+           topClass: top ? top.className : null,
+           topOuter: top ? top.outerHTML && top.outerHTML.substring(0,300) : null
+         };`,
+        element
+      );
+      console.log("Target rect/overlay info:", topInfo);
+
+      // If another element sits on top of the target, try clicking that instead (it may be the real control)
+      const shouldClickTop = topInfo && topInfo.topId && topInfo.topId !== element.getAttribute('id');
+
+      if (shouldClickTop) {
+        console.log("Different element detected at center; attempting to click the top element instead.");
+        // Click the element at point via document.elementFromPoint and dispatch mouse events
+        await this.driver.executeScript(
+          `(function(el){
+             const rect = el.getBoundingClientRect();
+             const cx = rect.left + rect.width/2;
+             const cy = rect.top + rect.height/2;
+             const top = document.elementFromPoint(cx, cy);
+             function dispatchMouse(target, type){
+               const ev = new MouseEvent(type, {bubbles:true, cancelable:true, view:window, button:0});
+               target.dispatchEvent(ev);
+             }
+             if(top){ top.focus(); dispatchMouse(top,'mouseover'); dispatchMouse(top,'mousedown'); dispatchMouse(top,'mouseup'); dispatchMouse(top,'click'); }
+           })(arguments[0]);`,
+          element
+        );
       } else {
-        throw error;
+        // Dispatch realistic mouse events on the intended element
+        await this.driver.executeScript(
+          `(function(el){
+             el.focus();
+             function dispatchMouse(target, type){
+               const ev = new MouseEvent(type, {bubbles:true, cancelable:true, view:window, button:0});
+               target.dispatchEvent(ev);
+             }
+             dispatchMouse(el,'mouseover');
+             dispatchMouse(el,'mousedown');
+             dispatchMouse(el,'mouseup');
+             dispatchMouse(el,'click');
+           })(arguments[0]);`,
+          element
+        );
+      }
+    } catch (err) {
+      console.log(`Robust click sequence failed (${err && (err.name || err.message)}). Attempting JS click fallback.`);
+      try {
+        await this.driver.executeScript('arguments[0].click();', element);
+      } catch (jsErr) {
+        throw jsErr;
       }
     }
   }
@@ -111,14 +157,9 @@ class BrowserAutomation {
     await element.sendKeys(text);
   }
   async scrollToElement(selector, selectorType){
-    console.log("Request for scrolling to element");
+    try {
+      console.log("Request for scrolling to element");
     let element;
-    
-    // Clean up selector if it has CSS-style prefix but selectorType is id
-    if (selectorType === 'id' && selector.startsWith('#')) {
-      selector = selector.substring(1);
-    }
-    
     switch (selectorType) {
       case "id":
         element = await this.driver.wait(until.elementLocated(By.id(selector)), 5000);
@@ -130,40 +171,59 @@ class BrowserAutomation {
         element = await this.driver.wait(until.elementLocated(By.xpath(selector)), 5000);
         break;
       case "text":
-        element = await this.driver.wait(
-          until.elementLocated(By.xpath(`//*[contains(normalize-space(text()), "${selector}")]`)),
+        const elements = await this.driver.wait(
+          until.elementsLocated(By.xpath(`//*[contains(normalize-space(text()), "${selector}")]`)),
           5000
         );
+          element = elements[elements.length - 1]
         break;
       default:
         throw new Error(`Unsupported selector type: ${selectorType}`);
     }
-    await this.driver.executeScript("arguments[0].scrollIntoView(true)", element);
+    await this.driver.executeScript("arguments[0].scrollIntoView({block:'center',inline:'center'})", element);
     console.log("Scrolled to the element");
+    } catch (error) {
+      console.log("erorr",error)
+    }    
   }
 
     async waitForElement(selector, selectorType = 'id', timeout = 5000){
         console.log(`Waiting for element with ${selectorType}: ${selector}`);
-        
-        // Clean up selector if it has CSS-style prefix but selectorType is id
+        try {
+           // Clean up selector if it has CSS-style prefix but selectorType is id
         if (selectorType === 'id' && selector.startsWith('#')) {
             selector = selector.substring(1);
         }
-        
+        let element;
         switch(selectorType) {
             case 'id':
-                return await this.driver.wait(until.elementLocated(By.id(selector)), timeout);
+                element= await this.driver.wait(until.elementLocated(By.id(selector)), timeout);
+                break;
             case 'xpath':
-                return await this.driver.wait(until.elementLocated(By.xpath(selector)), timeout);
+                element= await this.driver.wait(until.elementLocated(By.xpath(selector)), timeout);
+                break;
             case 'css':
-                return await this.driver.wait(until.elementLocated(By.css(selector)), timeout);
+                element= await this.driver.wait(until.elementLocated(By.css(selector)), timeout);
+                break;
             case 'text':
                 const xpathSelectorWait = `//*[contains(normalize-space(text()), "${selector}") or contains(normalize-space(@value), "${selector}") or contains(normalize-space(@alt), "${selector}") or contains(normalize-space(@title), "${selector}")]`;
-                return await this.driver.wait(until.elementLocated(By.xpath(xpathSelectorWait)), timeout);
+                const elements= await this.driver.wait(until.elementsLocated(By.xpath(xpathSelectorWait)), timeout);
+                element = elements[elements.length -1]
+                break;
             default:
                 throw new Error(`Unsupported selector type: ${selectorType}`);
         }
-    }    async getPageSource(){
+        if(element){
+              await this.driver.executeScript("arguments[0].scrollIntoView({block:'center', inline:'center'})",element)
+          }
+        } catch (error) {
+          console.log("Error in waitForElement", error)
+          throw new Error(error);
+        }
+       
+    }    
+    
+    async getPageSource(){
         return this.driver.getPageSource();
     }
 
