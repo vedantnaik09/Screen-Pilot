@@ -151,7 +151,6 @@ If you dont find that element then select the element with selectorType:"text" a
 NOTE: The html content would only have elements and ids of the top part of the content, which likely covers the header and the navbar. So only choose the selectors from the html content if you think you are choosing the element from the truncated html. Selectors with "nav-" etc are majorly used for navigation and not for performing any actions. In that case rely on the above screenshot analysis suggestion.
 
 
-${JSON.stringify(visionAnalysis, null, 2)}
 ${cleanHTML ? `
 
 The below html only provides a snippet of the truncated html which would likely indicate the top part of the page only, so it is likely that the elements in the html only include the header and the navbar, so verify if clicking on those buttons is relevant. If you think the element to be clicked is outside the html content rely solely on the screenshot analysis provided and use the selectorType as text for clicking buttons/links and the selector would be indicated by selectorFromAnalysis from the screenshot analysis. Elements with nav would indicate that they are navbar elements and are primarily used for navigation and not for performing any action, so if you are looking to perform an action refer to the screenshot analysis.
@@ -273,22 +272,31 @@ Generate the actions array:`;
             const visionAnalysis = await this.analyzeScreenshotForElements(screenshotPath, query, 6);
             
             console.log('Step 2: Generating recovery actions with text model...');
-            const recoveryPrompt = `You are a browser automation assistant used by selenium. The previous action failed. Generate recovery actions to continue the task.
+            const recoveryPrompt = `You are a browser automation assistant used by selenium. You are generating array of actions for a particular phase(A phase indicates actions upto the navigation change or dom content change or button click). Dont generate actions after any action that would cause these consequences: navigation change or dom content change or button click. The previous action failed. Generate recovery actions to continue the task.
 
 **ORIGINAL TASK:** ${query}
 **FAILED ACTION:** ${JSON.stringify(lastAction, null, 2)}
 **ERROR:** ${error}
 ${interceptingElement ? `**INTERCEPTING ELEMENT:** ${interceptingElement}` : ''}
 
-**CURRENT SCREENSHOT ANALYSIS:**
-${JSON.stringify(visionAnalysis, null, 2)}
+**SCREENSHOT ANALYSIS:**
+Elements suggested by the screenshot analysis: ${visionAnalysis.elements}
+Please take this suggestion very seriously and only generate actions according to this suggestion, dont generate anything not relevant to this suggestion: ${visionAnalysis.suggestion}
+If the above suggestions asks you to click on a certain element then try if you can find that selector with its id or class in the below truncated html content, if you find it use that.
+If you dont find that element then select the element with selectorType:"text" and selector as selectorFromAnalysis(dont include # at the start of this).
+
+NOTE: The html content would only have elements and ids of the top part of the content, which likely covers the header and the navbar. So only choose the selectors from the html content if you think you are choosing the element from the truncated html. Selectors with "nav-" etc are majorly used for navigation and not for performing any actions. In that case rely on the above screenshot analysis suggestion.
 
 ${cleanHTML ? `
-**HTML STRUCTURE:**
+
+The below html only provides a snippet of the truncated html which would likely indicate the top part of the page only, so it is likely that the elements in the html only include the header and the navbar, so verify if clicking on those buttons is relevant. If you think the element to be clicked is outside the html content rely solely on the screenshot analysis provided and use the selectorType as text for clicking buttons/links and the selector would be indicated by selectorFromAnalysis from the screenshot analysis. Elements with nav would indicate that they are navbar elements and are primarily used for navigation and not for performing any action, so if you are looking to perform an action refer to the screenshot analysis.
+
+**HTML STRUCTURE OF THE TOP PART ONLY:**
 ${cleanHTML}
+
+ The html is only a snippet of the top part of the page so it may not cover the entire page. If you feel that is the case please rely on the screenshot analysis. If you find that the screenshot analysis differs from the html content then prefer to select the elements using the screenshot analysis.
 ` : ''}
 
-The html is only a snippet of the top part of the page so it may not cover the entire page. If you feel that is the case please rely on the screenshot analysis. If you find that the screenshot analysis differs from the html content then prefer to select the elements using the screenshot analysis.
 
 **RECOVERY RULES:**
 1. Return ONLY a JSON array of actions (no markdown, no explanation)
@@ -299,11 +307,11 @@ The html is only a snippet of the top part of the page so it may not cover the e
 6. If click was intercepted, try clicking the intercepting element instead
 7. For "element not interactable" errors, try scrolling or waiting first
 8. Use shorter text selectors (max 10 characters) to avoid XPath syntax errors
-9. Generate maximum 3 recovery actions
+9. Generate minimum number of actions upto 3 required to satisfy this suggestion: ${visionAnalysis.suggestion}
 10. DO NOT restart the task - continue from current state
 11. Only generate actions for elements visible in the screenshot analysis
-12. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. It would be true for the last action of the array. For the first navigation or dom change set phaseCompleted as true and that would be the last action of the array.
-13. Set "completed": true ONLY when this action will finish the query: ${query}
+12. Set "phaseCompleted": true if no more actions can be generated in the current scope of the html content or the screenshot. For the navigation or dom change set phaseCompleted as true. No subsequent actions should be generated after an action which would cause dom change or navigation.
+13. Set "completed": true ONLY when this current action will finish the execution of the query: ${query}
 14. Don't repeat previous actions unless necessary
 15. If a required element is not visible, you may scroll to it first
 16. If an action failed with "Wait timed out", the element doesn't exist - use different selector/selectorType
@@ -322,9 +330,11 @@ The html is only a snippet of the top part of the page so it may not cover the e
 - text: Very short unique visible text from screenshot analysis, max 10 chars (e.g., "Submit", "Add", "Search")
 
 **IMPORTANT:** 
-- Use the screenshot analysis to identify what's actually visible
-- Prefer text selectors from screenshot analysis for failed actions
-- Try alternative approaches if the original selector failed
+- Cross-reference the screenshot analysis with HTML structure to choose the best selectors
+- Prioritize elements that are confirmed visible in the screenshot analysis
+- Use exact text from the screenshot analysis for text selectors
+- navigateToWebsite action would always have phaseCompleted as true
+- If an action has phaseCompleted as true then dont generate anymore elements after that action element in the array.
 
 Generate recovery actions:`;
 

@@ -1,6 +1,6 @@
 const browserSessionManager = require("./BrowserSessionManager");
-// const LLMService = require("./LLMService");
-const LLMService = require("./OllamaLLMService");
+const LLMService = require("./LLMService");
+// const LLMService = require("./OllamaLLMService");
 
 class TaskAutomation {
     async startTask(options) {
@@ -26,19 +26,13 @@ class TaskAutomation {
 
                 let actions;
                 if (phase === 0) {
-                    // Refresh htmlSnippet immediately before the LLM call to ensure latest DOM
-                    htmlSnippet = await browserAutomation.getCleanHTML();
                     console.log(`[Phase ${phase}] Calling analyzeScreenshotAndQuery (htmlSnippet length: ${htmlSnippet.length})...`);
                     actions = await llmService.analyzeScreenshotAndQuery(screenshotPath, options.query, htmlSnippet);
                 } else {
-                    // Refresh htmlSnippet immediately before the LLM call to ensure latest DOM
-                    htmlSnippet = await browserAutomation.getCleanHTML();
                     console.log(`[Phase ${phase}] Calling analyzeWithContext with previous actions:`, previousActions.slice(-3));
                     console.log(`[Phase ${phase}] analyzeWithContext htmlSnippet length: ${htmlSnippet.length}`);
                     actions = await llmService.analyzeWithContext(screenshotPath, options.query, previousActions.slice(-3), htmlSnippet);
                 }
-
-                // Use actions returned by LLM as-is; LLM is instructed to make any phaseCompleted:true action the final action.
 
                 if (!Array.isArray(actions) || actions.length === 0) {
                     console.log(`[Phase ${phase}] No actions returned by the LLM`);
@@ -57,6 +51,7 @@ class TaskAutomation {
                     
                     // Refresh htmlSnippet before error recovery call
                     const refreshedHtmlSnippet = await browserAutomation.getCleanHTML();
+                    screenshotPath = await browserAutomation.takeScreenshot();
                     console.log(`[Phase ${phase}] Calling handleActionError with refreshed htmlSnippet length: ${refreshedHtmlSnippet.length}`);
                     const errorActions = await llmService.handleActionError({
                         screenshotPath,
