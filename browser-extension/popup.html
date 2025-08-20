@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 400px;
+      min-height: 500px;
+      padding: 20px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 25px;
+    }
+    
+    .header h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 600;
+    }
+    
+    .header p {
+      margin: 5px 0 0 0;
+      opacity: 0.9;
+      font-size: 14px;
+    }
+    
+    .input-section {
+      margin-bottom: 20px;
+    }
+    
+    .input-group {
+      margin-bottom: 15px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    
+    input, textarea, select {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      box-sizing: border-box;
+      background: rgba(255, 255, 255, 0.9);
+      color: #333;
+    }
+    
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+      font-family: inherit;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    
+    button {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      transition: all 0.3s ease;
+    }
+    
+    .btn-primary {
+      background: #4CAF50;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #45a049;
+      transform: translateY(-1px);
+    }
+    
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+    
+    .btn-danger {
+      background: #f44336;
+      color: white;
+    }
+    
+    .btn-danger:hover {
+      background: #da190b;
+    }
+    
+    .status-section {
+      margin-top: 20px;
+      padding: 15px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      backdrop-filter: blur(10px);
+    }
+    
+    .status-title {
+      font-weight: 600;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+    
+    .status-content {
+      font-size: 13px;
+      line-height: 1.4;
+      opacity: 0.9;
+    }
+    
+    .hidden {
+      display: none;
+    }
+    
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 1s ease-in-out infinite;
+      margin-right: 8px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .action-log {
+      max-height: 200px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 10px;
+      border-radius: 5px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+    }
+    
+    .log-entry {
+      margin-bottom: 5px;
+      padding: 2px 0;
+    }
+    
+    .log-success {
+      color: #4CAF50;
+    }
+    
+    .log-error {
+      color: #f44336;
+    }
+    
+    .log-info {
+      color: #2196F3;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🤖 Browser Automator</h1>
+    <p>AI-powered automation for your browser</p>
+  </div>
+  
+  <div class="input-section">
+    <div class="input-group">
+      <label for="taskQuery">Task Description:</label>
+      <textarea id="taskQuery" placeholder="Describe what you want to automate (e.g., 'Search for iPhone on Amazon and add the first result to cart')"></textarea>
+    </div>
+    
+    <div class="input-group">
+      <label for="llmProvider">LLM Provider:</label>
+      <select id="llmProvider">
+        <option value="server">Use Server LLM (Gemini)</option>
+        <option value="openai">OpenAI GPT-4</option>
+        <option value="anthropic">Anthropic Claude</option>
+      </select>
+    </div>
+    
+    <div class="input-group" id="apiKeyGroup" style="display: none;">
+      <label for="apiKey">API Key:</label>
+      <input type="password" id="apiKey" placeholder="Enter your API key">
+    </div>
+  </div>
+  
+  <div class="button-group">
+    <button id="startTask" class="btn-primary">
+      <span id="startTaskText">Start Task</span>
+    </button>
+    <button id="stopTask" class="btn-danger hidden">
+      Stop Task
+    </button>
+  </div>
+  
+  <div class="button-group">
+    <button id="takeScreenshot" class="btn-secondary">
+      📸 Screenshot
+    </button>
+    <button id="getPageInfo" class="btn-secondary">
+      📄 Page Info
+    </button>
+  </div>
+  
+  <div class="status-section">
+    <div class="status-title">Status</div>
+    <div id="statusContent" class="status-content">Ready to automate</div>
+  </div>
+  
+  <div class="status-section">
+    <div class="status-title">Action Log</div>
+    <div id="actionLog" class="action-log">
+      <div class="log-entry log-info">Extension loaded successfully</div>
+    </div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
