@@ -3,8 +3,12 @@ const LLMService = require("./LLMService");
 // const LLMService = require("./OllamaLLMService");
 
 class TaskAutomation {
+    constructor() {
+        this.browserAutomation = null;
+    }
+
     async startTask(options) {
-        const browserAutomation = await browserSessionManager.getBrowser();
+        const start = Date.now();
         const llmService = new LLMService();
         let completed = false;
         let previousActions = [];
@@ -13,25 +17,33 @@ class TaskAutomation {
 
         console.log(`\n🎯 STARTING TASK: ${options.query}`);
         console.log(`📊 TASK STATE: completed=${completed}, phase=${phase}`);
+        console.log("ℹ️ Browser will be initialized only if needed (navigateToWebsite action)");
 
         while (!completed) {
 
             try {
-                console.log(`\n[Phase ${phase}] Taking screenshot...`);
-                screenshotPath = await browserAutomation.takeScreenshot();
+                // Only take screenshot and get HTML if browser is initialized
+                if (this.browserAutomation !== null) {
+                    console.log(`\n[Phase ${phase}] Taking screenshot...`);
+                    screenshotPath = await this.browserAutomation.takeScreenshot();
 
-                console.log(`[Phase ${phase}] Getting clean HTML for context...`);
-                let htmlSnippet = await browserAutomation.getCleanHTML();
-                console.log(`[Phase ${phase}] HTML snippet length: ${htmlSnippet.length} characters`);
+                    console.log(`[Phase ${phase}] Getting clean HTML for context...`);
+                    var cleanHTML = await this.browserAutomation.getCleanHTML();
+                    console.log(`[Phase ${phase}] HTML snippet length: ${cleanHTML.length} characters`);
+                } else {
+                    console.log(`\n[Phase ${phase}] Browser not initialized yet, proceeding without screenshot/HTML...`);
+                    screenshotPath = null;
+                    var cleanHTML = "";
+                }
 
                 let actions;
                 if (phase === 0) {
-                    console.log(`[Phase ${phase}] Calling analyzeScreenshotAndQuery (htmlSnippet length: ${htmlSnippet.length})...`);
-                    actions = await llmService.analyzeScreenshotAndQuery(screenshotPath, options.query, htmlSnippet);
+                    console.log(`[Phase ${phase}] Calling analyzeScreenshotAndQuery (htmlSnippet length: ${cleanHTML.length})...`);
+                    actions = await llmService.analyzeScreenshotAndQuery(screenshotPath, options.query, cleanHTML);
                 } else {
                     console.log(`[Phase ${phase}] Calling analyzeWithContext with previous actions:`, previousActions.slice(-3));
-                    console.log(`[Phase ${phase}] analyzeWithContext htmlSnippet length: ${htmlSnippet.length}`);
-                    actions = await llmService.analyzeWithContext(screenshotPath, options.query, previousActions.slice(-3), htmlSnippet);
+                    console.log(`[Phase ${phase}] analyzeWithContext htmlSnippet length: ${cleanHTML.length}`);
+                    actions = await llmService.analyzeWithContext(screenshotPath, options.query, previousActions.slice(-3), cleanHTML);
                 }
 
                 if (!Array.isArray(actions) || actions.length === 0) {
@@ -41,7 +53,7 @@ class TaskAutomation {
                 }
 
                 // Try to execute all actions in the array
-                const executionResult = await this.executeActionsArray(browserAutomation, actions, phase, previousActions);
+                const executionResult = await this.executeActionsArray(actions, phase, previousActions);
                 
                 if (executionResult.error) {
                     // If there was an error, handle it
@@ -49,10 +61,18 @@ class TaskAutomation {
                     console.log(`[Phase ${phase}] 📝 Error details:`, executionResult.error.message);
                     console.log(`[Phase ${phase}] 🔧 Failed action:`, executionResult.lastAction);
                     
-                    // Refresh htmlSnippet before error recovery call
-                    const refreshedHtmlSnippet = await browserAutomation.getCleanHTML();
-                    screenshotPath = await browserAutomation.takeScreenshot();
-                    console.log(`[Phase ${phase}] Calling handleActionError with refreshed htmlSnippet length: ${refreshedHtmlSnippet.length}`);
+                    // Refresh htmlSnippet before error recovery call (only if browser is available)
+                    let refreshedCleanHTML;
+                    if (this.browserAutomation !== null) {
+                        refreshedCleanHTML = await this.browserAutomation.getCleanHTML();
+                        screenshotPath = await this.browserAutomation.takeScreenshot();
+                        console.log(`[Phase ${phase}] Calling handleActionError with refreshed htmlSnippet length: ${refreshedCleanHTML.length}`);
+                    } else {
+                        refreshedCleanHTML = "";
+                        screenshotPath = null;
+                        console.log(`[Phase ${phase}] Browser not available for error recovery context`);
+                    }
+                    
                     const errorActions = await llmService.handleActionError({
                         screenshotPath,
                         query: options.query,
@@ -60,14 +80,14 @@ class TaskAutomation {
                         lastAction: executionResult.lastAction,
                         error: executionResult.error.message,
                         interceptingElement: executionResult.interceptingElement,
-                        htmlSnippet: refreshedHtmlSnippet
+                        htmlSnippet: refreshedCleanHTML
                     });
 
                     if (Array.isArray(errorActions) && errorActions.length > 0) {
                         console.log(`[Phase ${phase}] 🔄 Received ${errorActions.length} error recovery actions from LLM`);
                         console.log(`[Phase ${phase}] 🔄 Recovery actions:`, JSON.stringify(errorActions, null, 2));
                         
-                        const errorExecutionResult = await this.executeActionsArray(browserAutomation, errorActions, phase, previousActions, true);
+                        const errorExecutionResult = await this.executeActionsArray(errorActions, phase, previousActions, true);
                         
                         if (errorExecutionResult.error) {
                             console.log(`[Phase ${phase}] ❌ Error in recovery actions, moving to next phase`);
@@ -99,10 +119,13 @@ class TaskAutomation {
             }
         }
         
+        const end = Date.now();
+        const duration = (end - start) / 1000;
+        console.log(`startTask function took ${duration.toFixed(4)} seconds`);
         console.log("Task completed.");
     }
 
-    async executeActionsArray(browserAutomation, actions, phase, previousActions, isErrorRecovery = false) {
+    async executeActionsArray(actions, phase, previousActions, isErrorRecovery = false) {
         const prefix = isErrorRecovery ? "fallback " : "";
         // If the LLM returned an action with phaseCompleted=true, ignore any actions that come after it.
         if (Array.isArray(actions) && actions.length > 0) {
@@ -117,9 +140,13 @@ class TaskAutomation {
             console.log(`[Phase ${phase}] Executing ${prefix}action ${i + 1}/${actions.length}:`, actionObj);
             
             try {
-                await this.executeAction(browserAutomation, actionObj);
+                await this.executeAction(actionObj);
                 previousActions.push(actionObj);
-                await browserAutomation.takeScreenshot();
+                
+                // Only take screenshot if browser is initialized
+                if (this.browserAutomation !== null) {
+                    await this.browserAutomation.takeScreenshot();
+                }
 
                 // Check if task is completed
                 if (actionObj.completed === true) {
@@ -184,25 +211,35 @@ class TaskAutomation {
         return { success: true };
     }
 
-    async executeAction(browserAutomation, actionObj) {
+    async executeAction(actionObj) {
         const { action, params } = actionObj;
         switch (action) {
             case "navigateToWebsite":
+                // Lazy initialization: Initialize browser only when navigateToWebsite is called
+                if (this.browserAutomation === null) {
+                    console.log("🌐 Initializing browser for the first time...");
+                    this.browserAutomation = await browserSessionManager.getBrowser();
+                    console.log("✅ Browser initialized successfully");
+                }
                 let url = params.website || params.selector;
                 if (!url) throw new Error("No URL provided for navigateToWebsite");
-                await browserAutomation.navigateToWebsite(url);
+                await this.browserAutomation.navigateToWebsite(url);
                 break;
             case "clickElement":
-                await browserAutomation.clickElement(params.selector, params.selectorType);
+                if (this.browserAutomation === null) throw new Error("Browser not initialized. Call navigateToWebsite first.");
+                await this.browserAutomation.clickElement(params.selector, params.selectorType);
                 break;
             case "fillInput":
-                await browserAutomation.fillInput(params.selector, params.text, params.selectorType);
+                if (this.browserAutomation === null) throw new Error("Browser not initialized. Call navigateToWebsite first.");
+                await this.browserAutomation.fillInput(params.selector, params.text, params.selectorType);
                 break;
             case "scrollToElement":
-                await browserAutomation.scrollToElement(params.selector, params.selectorType);
+                if (this.browserAutomation === null) throw new Error("Browser not initialized. Call navigateToWebsite first.");
+                await this.browserAutomation.scrollToElement(params.selector, params.selectorType);
                 break;
             case "waitForElement":
-                await browserAutomation.waitForElement(params.selector, params.selectorType, params.timeout);
+                if (this.browserAutomation === null) throw new Error("Browser not initialized. Call navigateToWebsite first.");
+                await this.browserAutomation.waitForElement(params.selector, params.selectorType, params.timeout);
                 break;
             default:
                 throw new Error(`Unknown action: ${action}`);
