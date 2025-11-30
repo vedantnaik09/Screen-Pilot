@@ -5,8 +5,8 @@ This document describes the backend for the Screen-Pilot project (server side on
 ## Demo
 
 Embedded demo (YouTube):
-
-<iframe width="560" height="315" src="https://www.youtube.com/embed/H4oogFkRUfA?si=zLFB530l2Qns5khC" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</br>
+[<img src="https://img.youtube.com/vi/H4oogFkRUfA/hqdefault.jpg" width="560" height="315" />](https://www.youtube.com/embed/H4oogFkRUfA)
 
 Or open the demo directly on YouTube:
 
